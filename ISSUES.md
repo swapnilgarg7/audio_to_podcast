@@ -111,10 +111,19 @@ full run. Worth confirming which are genuinely flaky before chasing them.
 1. **`OPENAI_API_KEY` is unset** in `config/secrets/secrets.env`. Stages 40-60
    are mostly LLM calls, so the reported failure band cannot be reproduced
    without it. **This is the first thing to fix.**
-2. **Diarization is not installed.** Transcription works but labels every word
-   `spk_0`, so nothing downstream can tell interviewer from guest. That will
-   corrupt exactly the selection and framing stages in the 40-60 band, so this
-   must be settled before trusting any result there.
+2. **Diarization: deliberately not installed.** Decided to skip for now. Every
+   word is labelled `spk_0`, so nothing downstream can tell interviewer from
+   guest.
+
+   **What this means for debugging.** Crashes, exceptions and contract
+   violations in the 40-60 band still reproduce normally, so bug-hunting is
+   unaffected. But any *quality* output from the stages that reason about who
+   is speaking is meaningless: `speaker_roles` (8), `full_master_ranking` (40),
+   the framing stages (48-49) and `vo_line_adjudicate` (54) all consume
+   speaker identity. Do not report a quality verdict from those stages to
+   Nicket while this is off, and do not treat a plausible-looking result there
+   as evidence anything works. Install diarization first if a bug turns out to
+   depend on speaker attribution.
 
    macOS needs no setup: `mlx-community/diar_sortformer_4spk-v1-fp32` is
    ungated and MLX bundles the implementation. CUDA has no equally free path:
