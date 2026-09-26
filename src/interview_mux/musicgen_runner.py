@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from interview_mux.config import merged_config, repo_root
+from interview_mux.venv_paths import venv_python
 
 _BAN_MPS_ENV = "MUX_MUSICGEN_BAN_MPS"
 _BAN_MPS_MARKER = ".musicgen_ban_mps"
@@ -167,7 +168,15 @@ def musicgen_timeouts_for_duration(
 
 
 def musicgen_hf_home() -> Path:
-    """Isolated Hugging Face cache used by bootstrap_musicgen.sh."""
+    """Isolated Hugging Face cache used by bootstrap_musicgen.sh.
+
+    Override with ``musicgen.hf_cache_dir`` to host the weights (several GB)
+    off the repo volume — the same escape hatch the runtime venvs use.
+    """
+    custom = str((musicgen_cfg().get("hf_cache_dir") or "")).strip()
+    if custom:
+        path = Path(custom)
+        return path if path.is_absolute() else repo_root() / path
     return repo_root() / "ASSETS" / "local_musicgen" / "hf_cache"
 
 
@@ -175,11 +184,11 @@ def musicgen_venv_python() -> Path | None:
     rt = (merged_config().get("local_runtimes") or {}).get("musicgen") or {}
     venv = str(rt.get("venv_dir") or "ASSETS/local_musicgen/venv")
     root = repo_root()
-    py = root / venv / "bin" / "python"
+    py = venv_python(root / venv)
     if py.is_file():
         return py
     # Fall back to main .venv for lightweight stub / optional installs
-    main = root / ".venv" / "bin" / "python"
+    main = venv_python(root / ".venv")
     return main if main.is_file() else None
 
 

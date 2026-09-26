@@ -12,6 +12,8 @@ Pipeline: **67 stages** (34 analysis + 33 delivery) in [`src/interview_mux/v2/co
 
 Requires: macOS Apple Silicon recommended (local STT / image), Python 3.12, `ffmpeg`, Node (for GUI), Terraform `~> 1.14.7` if you will publish RSS.
 
+**Windows / Linux + NVIDIA:** MLX is Apple-only. Use `./scripts/bootstrap_venv_windows.sh`, which builds the CUDA equivalents (faster-whisper, transformers+bitsandbytes, DeepFilterNet wheel) behind the same pipeline contracts — see [docs/cross-cutting/windows-cuda-setup.md](docs/cross-cutting/windows-cuda-setup.md).
+
 ```bash
 # 1) Clone / enter repo
 cd interview_helper_mux

@@ -18,6 +18,17 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+def _repo_venv_python() -> Path:
+    """Repo .venv interpreter, cross-platform (Scripts/ on Windows, bin/ elsewhere)."""
+    venv = Path(__file__).resolve().parents[1] / ".venv"
+    bin_dir = venv / ("Scripts" if os.name == "nt" else "bin")
+    for name in (("python.exe", "python3.exe") if os.name == "nt" else ("python", "python3")):
+        cand = bin_dir / name
+        if cand.is_file():
+            return cand
+    return Path(sys.executable)
+
+
 
 def _e2e_soft() -> bool:
     from interview_mux.e2e_soft import e2e_soft_enabled
@@ -8165,7 +8176,7 @@ def run_until_done(body: dict[str, Any], label: str) -> dict[str, Any]:
 
                 _sp.run(
                     [
-                        str(_Proot(__file__).resolve().parents[1] / ".venv" / "bin" / "python"),
+                        str(_repo_venv_python()),
                         str(_Proot(__file__).resolve().parents[1] / "tools" / "full_auto_daemon_launch.py"),
                         "server",
                         "--restart-server",
@@ -13657,7 +13668,7 @@ def run_until_done(body: dict[str, Any], label: str) -> dict[str, Any]:
                     import subprocess as _sp
                     from pathlib import Path as _Proot
 
-                    _py = _Proot(__file__).resolve().parents[1] / ".venv" / "bin" / "python"
+                    _py = _repo_venv_python()
                     _sp.run([str(_py), "-m", "pip", "install", "boto3>=1.35,<2"], check=False, timeout=120)
                 except Exception as exc:
                     log(f"boto3 install: {exc}")
@@ -13669,7 +13680,7 @@ def run_until_done(body: dict[str, Any], label: str) -> dict[str, Any]:
                     import subprocess as _sp
                     from pathlib import Path as _Proot
 
-                    _py = _Proot(__file__).resolve().parents[1] / ".venv" / "bin" / "python"
+                    _py = _repo_venv_python()
                     _sp.run([str(_py), "-m", "pip", "install", "Pillow>=10,<12"], check=False, timeout=120)
                 except Exception as exc:
                     log(f"Pillow install: {exc}")

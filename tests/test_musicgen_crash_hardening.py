@@ -27,8 +27,19 @@ def test_is_abort_returncode() -> None:
 
 
 def test_hf_home_is_local_musicgen_cache() -> None:
+    """Cache is the isolated musicgen dir, not the shared ~/.cache/huggingface.
+
+    Accepts a `musicgen.hf_cache_dir` override so the multi-GB weights can live
+    off the repo volume; the default remains ASSETS/local_musicgen/hf_cache.
+    """
+    from interview_mux.config import merged_config
+
     home = musicgen_hf_home()
-    assert home.as_posix().endswith("ASSETS/local_musicgen/hf_cache")
+    override = str((merged_config().get("musicgen") or {}).get("hf_cache_dir") or "").strip()
+    if override:
+        assert home.as_posix() == Path(override).as_posix()
+    else:
+        assert home.as_posix().endswith("ASSETS/local_musicgen/hf_cache")
 
 
 def test_effective_device_auto_prefers_mps_on_apple_silicon(monkeypatch: pytest.MonkeyPatch) -> None:

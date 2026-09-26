@@ -297,3 +297,27 @@ model*.safetensors.index.json
 *.mp4.part
 *.ytdl
 *Frag*.part
+
+# Per-machine config overlay (paths to local model stacks, device tiers).
+config/app.local.json
+
+# ---- Test / runtime debris that must never be committed ----
+# A MagicMock used where a Path was expected writes its repr as a directory.
+/MagicMock/
+# pytest scratch dirs that leaked out of tmp_path.
+/.pytest_tmp_footgun_soft/
+/.pytest_tmp_*/
+# rstm harness outputs (tests/rstm/harness.py, enumerate_matrix.py).
+/rstm-results/
+/tests/rstm/matrix.json
+/tests/rstm/matrix.md
+# Operational GUI state; the real artifact is per-execution under ASSETS/.
+/gui_job.json
+# macOS Finder metadata.
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+# Windows shell metadata.
+Thumbs.db
+Desktop.ini

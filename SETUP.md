@@ -2,6 +2,8 @@
 
 Full fresh-env + RSS steps: **[README.md](README.md)**. Agent read order: **[AGENTS.md](AGENTS.md)**.
 
+On **Windows / Linux + NVIDIA** run `./scripts/bootstrap_venv_windows.sh` instead of `bootstrap_venv.sh` (MLX is Apple-only): **[docs/cross-cutting/windows-cuda-setup.md](docs/cross-cutting/windows-cuda-setup.md)**.
+
 ```bash
 ./scripts/bootstrap_venv.sh
 mkdir -p config/secrets ASSETS/input

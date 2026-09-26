@@ -4,6 +4,10 @@
 
 Authoritative defaults live in **`config/app.defaults.json`**. At runtime, `interview_mux.config.merged_config()` merges **`config/secrets/secrets.env`** (never commit secrets). This doc lists **meaningful keys**, what uses them, and **what breaks if wrong**.
 
+**Per-machine overrides — `config/app.local.json` (gitignored).** `load_defaults()` deep-merges this file over `app.defaults.json` before secrets are applied, so only the keys that differ need to appear. `app.defaults.json` is committed and shared across machines, so anything host-specific — where the heavy runtime venvs and model weights live, which model tier the local GPU can hold — belongs here instead. See [windows-cuda-setup.md](./windows-cuda-setup.md) for a worked example.
+
+Resolution order (highest wins): CLI flags → `secrets.env` → `app.local.json` → `app.defaults.json`.
+
 ---
 
 ## Launcher environment (not in `app.defaults.json`)

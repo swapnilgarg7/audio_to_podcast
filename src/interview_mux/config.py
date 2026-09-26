@@ -25,9 +25,49 @@ def repo_root() -> Path:
     )
 
 
-def load_defaults() -> dict[str, Any]:
+def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    """Recursively overlay one config dict onto another (overlay wins)."""
+    out = dict(base)
+    for key, val in overlay.items():
+        prev = out.get(key)
+        if isinstance(prev, dict) and isinstance(val, dict):
+            out[key] = _deep_merge(prev, val)
+        else:
+            out[key] = val
+    return out
+
+
+def shipped_defaults() -> dict[str, Any]:
+    """`app.defaults.json` alone — no per-machine overlay, no secrets.
+
+    Regression tests that lock what the project *ships* must read this, not
+    ``merged_config()``: otherwise any operator with a legitimate
+    ``app.local.json`` (different GPU tier, runtime venvs on another volume)
+    fails the suite, and the override layer becomes unusable.
+    """
     path = repo_root() / "config" / "app.defaults.json"
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_defaults() -> dict[str, Any]:
+    """app.defaults.json, with gitignored app.local.json layered on top.
+
+    ``app.defaults.json`` is committed and shared across machines, so it must
+    stay machine-neutral. Per-machine values — where the heavy local runtime
+    venvs and model weights live, which device tier to target — belong in
+    ``config/app.local.json``, which is gitignored. Keys merge recursively, so
+    the override file only names what actually differs.
+    """
+    cfg = shipped_defaults()
+    local_path = repo_root() / "config" / "app.local.json"
+    if local_path.is_file():
+        try:
+            local = json.loads(local_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Invalid JSON in {local_path}: {exc}") from exc
+        if isinstance(local, dict):
+            cfg = _deep_merge(cfg, local)
+    return cfg
 
 
 def load_secrets() -> dict[str, str]:

@@ -54,9 +54,11 @@ def test_musicality_pulse_clarity_prefers_modulated_over_flat() -> None:
 
 
 def test_musicgen_defaults_rhythmic_selection() -> None:
-    from interview_mux.config import merged_config
+    # Locks what the repo ships, so a per-machine app.local.json (smaller GPU
+    # tier, runtimes on another volume) does not fail the suite.
+    from interview_mux.config import merged_config, shipped_defaults
 
-    mg = merged_config().get("musicgen") or {}
+    mg = shipped_defaults().get("musicgen") or {}
     assert int(mg.get("best_of_n_underscore") or 0) == 3
     assert int(mg.get("best_of_n_speech_free") or 0) == 2
     assert int(mg.get("max_best_of_n") or 0) == 3

@@ -1,8 +1,0 @@
-{
-  "stage_id": "nugget_layup_compose",
-  "error": "pre-EDL delivery QC incomplete — refusing e2e stub without INTERVIEW_MUX_E2E_LAST_RESORT_SOFT=1",
-  "artifact_paths": [],
-  "log_excerpt": "",
-  "suggested_fix_class": "e2e_stub",
-  "next_action": "repair layups/orientation, run transitions and synthesize G1, then resume EDL; last-resort soft mode must be explicit"
-}

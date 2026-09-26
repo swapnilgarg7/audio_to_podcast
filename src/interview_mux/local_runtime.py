@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from interview_mux.operator_subprocess import run_command
+from interview_mux.venv_paths import venv_python
 from interview_mux.operator_trace import log_api_call, resolve_ctx, resolve_stage
 
 logger = logging.getLogger(__name__)
@@ -75,7 +76,7 @@ def resolve_venv_dir(runtime_id: str) -> Path:
 def resolve_venv_python(runtime_id: str) -> Path:
     if not runtime_enabled(runtime_id):
         raise LocalRuntimeUnavailable(f"Local runtime {runtime_id} is disabled in config")
-    py = resolve_venv_dir(runtime_id) / "bin" / "python"
+    py = venv_python(resolve_venv_dir(runtime_id))
     if not py.is_file():
         raise LocalRuntimeUnavailable(
             f"Missing venv python for {runtime_id}: {py}. Run ./scripts/bootstrap_venv.sh"

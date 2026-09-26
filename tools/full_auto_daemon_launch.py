@@ -21,7 +21,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / "ASSETS"
-VENV_PY = ROOT / ".venv" / "bin" / "python"
+
+def _venv_python(venv_dir: Path) -> Path:
+    """Interpreter inside a venv, cross-platform (Scripts/ on Windows, bin/ elsewhere)."""
+    bin_dir = venv_dir / ("Scripts" if os.name == "nt" else "bin")
+    for name in (("python.exe", "python3.exe") if os.name == "nt" else ("python", "python3")):
+        cand = bin_dir / name
+        if cand.is_file():
+            return cand
+    return bin_dir / ("python.exe" if os.name == "nt" else "python")
+
+VENV_PY = _venv_python(ROOT / ".venv")
 E2E_CONSOLE = ASSETS / "full_auto_console.log"
 RUN_POINTER = ASSETS / "full_auto_current_run.txt"
 FRESH_PENDING = ASSETS / "full_auto_fresh_pending.json"

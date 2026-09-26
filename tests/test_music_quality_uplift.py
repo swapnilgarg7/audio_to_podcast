@@ -23,7 +23,10 @@ from interview_mux.stages.understanding import _derive_mix_contract
 
 
 def test_musicgen_defaults_large_and_fail_closed():
-    cfg = musicgen_cfg()
+    # Shipped defaults, not the machine-merged config — see shipped_defaults().
+    from interview_mux.config import shipped_defaults
+
+    cfg = shipped_defaults().get("musicgen") or {}
     assert "musicgen-large" in str(cfg.get("model_id") or "")
     assert "melody" in str(cfg.get("melody_model_id") or "")
     assert int(cfg.get("request_timeout_sec") or 0) == 900

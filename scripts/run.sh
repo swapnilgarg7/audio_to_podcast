@@ -40,6 +40,21 @@ cd "$ROOT"
 
 export PYTHONUNBUFFERED=1
 export MUX_LAUNCHED_VIA=run.sh
+# Windows prints cp1252 by default and the pipeline logs non-ASCII (→, ✓);
+# UTF-8 mode keeps subprocess stdout decodable on every platform.
+export PYTHONUTF8=1
+
+# Put the core .venv first on PATH so every bare `python` below is the venv
+# interpreter without the caller having to activate it. bin/ on POSIX,
+# Scripts/ on Windows (Git Bash / MSYS).
+if [[ -x "$ROOT/.venv/bin/python" ]]; then
+  export PATH="$ROOT/.venv/bin:$PATH"
+elif [[ -x "$ROOT/.venv/Scripts/python.exe" ]]; then
+  export PATH="$ROOT/.venv/Scripts:$PATH"
+else
+  echo "ERROR: core .venv missing — run ./scripts/bootstrap_venv.sh first" >&2
+  exit 1
+fi
 
 CLI_MODE=0
 SERVE_ARGS=()
@@ -190,7 +205,11 @@ fi
 if [[ "${MUX_REFRESH_DEPS:-0}" == "1" ]]; then
   bash "$ROOT/scripts/lib/install_core_venv.sh"
   # shellcheck source=/dev/null
-  source "$ROOT/.venv/bin/activate"
+  if [[ -f "$ROOT/.venv/bin/activate" ]]; then
+    source "$ROOT/.venv/bin/activate"
+  else
+    source "$ROOT/.venv/Scripts/activate"
+  fi
 fi
 
 if [[ "${MUX_REBUILD_GUI:-0}" == "1" ]]; then

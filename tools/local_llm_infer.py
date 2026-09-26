@@ -23,9 +23,10 @@ def main() -> int:
 
     try:
         from mlx_lm import generate, load
-    except ImportError as exc:
-        print(json.dumps({"error": f"mlx_lm missing: {exc}"}))
-        return 1
+
+        mlx_ok = True
+    except ImportError:
+        mlx_ok = False
 
     if model_path:
         path = Path(str(model_path))
@@ -36,6 +37,24 @@ def main() -> int:
     if not path.is_dir():
         print(json.dumps({"error": f"weights missing at {path}"}))
         return 1
+
+    if not mlx_ok:
+        # No MLX on this host (Windows / Linux / Intel Mac) — use transformers.
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        try:
+            import local_llm_backend_transformers as backend
+        except ImportError as exc:
+            print(json.dumps({"error": f"no local LLM backend: mlx_lm and transformers missing ({exc})"}))
+            return 1
+        try:
+            text, meta = backend.generate(
+                system=system, user=user, max_tokens=max_tokens, model_path=path
+            )
+        except Exception as exc:
+            print(json.dumps({"error": f"transformers infer failed: {str(exc)[:400]}"}))
+            return 1
+        print(json.dumps({"text": text, "meta": meta}))
+        return 0
 
     model, tokenizer = load(str(path))
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]

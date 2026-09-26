@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VENV="$ROOT/.venv"
 PY="${PYTHON:-/opt/homebrew/bin/python3.12}"
 if [[ ! -x "$PY" ]]; then
-  PY="$(command -v python3.12 2>/dev/null || command -v python3)"
+  PY="$(command -v python3.12 2>/dev/null || command -v python3 2>/dev/null || command -v python)"
 fi
 
 if [[ ! -x "$PY" ]]; then
@@ -22,15 +22,28 @@ if [[ ! -d "$VENV" ]]; then
   "$PY" -m venv "$VENV"
 fi
 
+# Activate the venv: bin/ on POSIX, Scripts/ on Windows (Git Bash / MSYS).
 # shellcheck source=/dev/null
-source "$VENV/bin/activate"
+if [[ -f "$VENV/bin/activate" ]]; then
+  source "$VENV/bin/activate"
+else
+  source "$VENV/Scripts/activate"
+fi
 
 echo "Upgrading pip / setuptools / wheel ..."
 pip install -U pip setuptools wheel
 
 if [[ -f "$ROOT/requirements.lock" ]]; then
   echo "Installing from requirements.lock (anchor lock) ..."
-  pip install -r "$ROOT/requirements.lock"
+  if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* || "$(uname -s)" == CYGWIN* ]]; then
+    # uvloop has no Windows build; uvicorn falls back to the asyncio loop.
+    LOCK_WIN="$(mktemp)"
+    grep -v '^uvloop==' "$ROOT/requirements.lock" > "$LOCK_WIN"
+    pip install -r "$LOCK_WIN"
+    rm -f "$LOCK_WIN"
+  else
+    pip install -r "$ROOT/requirements.lock"
+  fi
 else
   echo "requirements.lock missing — falling back to requirements.txt"
   pip install -r "$ROOT/requirements.txt"

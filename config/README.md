@@ -4,7 +4,8 @@ Resolution order (highest wins):
 
 1. CLI flags (`--input`, `--run-id`)
 2. `config/secrets/secrets.env`
-3. `config/app.defaults.json`
+3. `config/app.local.json` (gitignored, per-machine)
+4. `config/app.defaults.json`
 
 ## Files
 
@@ -13,6 +14,7 @@ Resolution order (highest wins):
 | `app.defaults.json` | yes | Paths, model routing, `podcast.*` (bucket/layout/show meta) |
 | `templates/app.defaults.json` | yes | Copy template |
 | `templates/secrets.env.example` | yes | Secrets template |
+| `app.local.json` | **gitignored** | Per-machine overrides deep-merged over `app.defaults.json` (local runtime venv paths, model tiers) |
 | `secrets/secrets.env` | **gitignored** | API keys + AWS creds + derived `PODCAST_*` |
 | `terraform.tfvars.example` | yes | Copy → `terraform.tfvars` for Terraform (`scripts/tf-*.sh`) |
 | `terraform.tfvars` | **gitignored** | Operator Terraform variable values |

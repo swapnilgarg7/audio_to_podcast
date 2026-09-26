@@ -21,6 +21,16 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+def _venv_python(venv_dir: Path) -> Path:
+    """Interpreter inside a venv, cross-platform (Scripts/ on Windows, bin/ elsewhere)."""
+    bin_dir = venv_dir / ("Scripts" if os.name == "nt" else "bin")
+    for name in (("python.exe", "python3.exe") if os.name == "nt" else ("python", "python3")):
+        cand = bin_dir / name
+        if cand.is_file():
+            return cand
+    return bin_dir / ("python.exe" if os.name == "nt" else "python")
+
 ASSETS = ROOT / "ASSETS"
 STATUS = ASSETS / "full_auto_status.json"
 LOG = ASSETS / "full_auto_watchdog.log"
@@ -52,7 +62,7 @@ def log(msg: str) -> None:
 def launch(mode: str, *extra: str) -> None:
     import subprocess
 
-    py = ROOT / ".venv" / "bin" / "python"
+    py = _venv_python(ROOT / ".venv")
     cmd = [str(py), str(ROOT / "tools" / "full_auto_daemon_launch.py"), mode, *extra, "--no-keepalive"]
     env = os.environ.copy()
     env["MUX_KEEPALIVE"] = "0"

@@ -1,2 +1,29 @@
+# Normalize line endings to LF in the repository and in working trees.
+# The project is developed on macOS (LF). Without this, a Windows checkout with
+# core.autocrlf=true rewrites every generated file — notably the committed GUI
+# bundle under src/interview_mux/web/static/ — producing CRLF-only diffs that
+# bury real changes in a PR.
+* text=auto eol=lf
+
+# Binary assets: never touch these bytes.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.wav binary
+*.mp3 binary
+*.mp4 binary
+*.flac binary
+*.safetensors binary
+*.ckpt binary
+*.pt binary
+*.bin binary
+*.woff binary
+*.woff2 binary
+*.zip binary
+*.gz binary
+
 # Avoid automatic merges of Terraform state (resolve conflicts intentionally).
 terraform/state/terraform.tfstate merge=binary

@@ -9,14 +9,34 @@ from pathlib import Path
 from typing import Any
 
 
-def _verify() -> int:
+def _mlx_available() -> bool:
+    """True when the Apple-Silicon MLX audio stack is importable."""
     try:
         import mlx_audio  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def _fw_backend():
+    """Import the faster-whisper backend (CUDA/CPU hosts without MLX)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import stt_backend_faster_whisper as backend
+
+    return backend
+
+
+def _verify() -> int:
+    if _mlx_available():
+        print(json.dumps({"ok": True, "stack": "mlx-audio"}))
+        return 0
+    try:
+        payload = _fw_backend().verify()
     except ImportError as exc:
-        print(json.dumps({"error": f"mlx_audio missing: {exc}"}))
+        print(json.dumps({"error": f"no STT backend: mlx_audio and faster_whisper missing ({exc})"}))
         return 1
-    print(json.dumps({"ok": True, "stack": "mlx-audio"}))
-    return 0
+    print(json.dumps(payload))
+    return 0 if payload.get("ok") else 1
 
 
 def _segments_to_words(segments: list[Any]) -> list[dict[str, Any]]:
@@ -180,6 +200,8 @@ def _transcribe_whisper(audio: Path, model_id: str) -> dict[str, Any]:
 
 
 def transcribe(audio: Path, model_id: str, *, diarization_mode: str) -> dict[str, Any]:
+    if not _mlx_available():
+        return _fw_backend().transcribe(audio, model_id, diarization_mode=diarization_mode)
     if "VibeVoice" in model_id or "MOSS" in model_id or diarization_mode == "integrated":
         return _transcribe_vibevoice(audio, model_id)
     return _transcribe_whisper(audio, model_id)
