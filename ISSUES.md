@@ -113,9 +113,25 @@ full run. Worth confirming which are genuinely flaky before chasing them.
    without it. **This is the first thing to fix.**
 2. **Diarization is not installed.** Transcription works but labels every word
    `spk_0`, so nothing downstream can tell interviewer from guest. That will
-   corrupt exactly the selection and framing stages in the 40-60 band, so it
-   must be installed before trusting any result there. Needs a gated pyannote
-   model plus `HF_TOKEN`; steps in
+   corrupt exactly the selection and framing stages in the 40-60 band, so this
+   must be settled before trusting any result there.
+
+   macOS needs no setup: `mlx-community/diar_sortformer_4spk-v1-fp32` is
+   ungated and MLX bundles the implementation. CUDA has no equally free path:
+
+   - **pyannote** (MIT, clean pip install) is gated `gated=auto`, so it needs
+     terms accepted on the model page plus `HF_TOKEN`.
+   - **The same Sortformer model** (`nvidia/diar_sortformer_4spk-v1`) is
+     ungated, but `transformers` does not implement Sortformer. Its config
+     claims `transformers_version: 5.0.0.dev0` from an unmerged branch; there
+     is no `models/sortformer` in the 5.17 release or in git main (verified).
+     It needs `nemo_toolkit[asr]`, heavy and imperfectly supported on Windows.
+
+   **Licensing, worth raising with Nicket:** `nvidia/diar_sortformer_4spk-v1`
+   is **cc-by-nc-4.0, non-commercial**, and the macOS default is the MLX port
+   of it. A commercially published podcast therefore has a licensing problem on
+   **both** platforms, not just this one. pyannote is MIT, so switching both
+   machines to it may be the better call. Options and steps in
    [docs/cross-cutting/windows-cuda-setup.md](docs/cross-cutting/windows-cuda-setup.md).
 3. **No source audio** in `ASSETS/input/`.
 

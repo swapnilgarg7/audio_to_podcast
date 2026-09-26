@@ -147,14 +147,39 @@ computes in fp16. STT uses `int8_float16`; override with `MUX_STT_DEVICE` /
 
 ## Diarization
 
-The MLX path uses Sortformer. The CUDA path uses pyannote, which is **not
-installed by default**. It is gated on Hugging Face and needs an account:
+macOS needs no setup here: `mlx_audio.vad` loads
+`mlx-community/diar_sortformer_4spk-v1-fp32`, which is **ungated**, and MLX
+bundles the Sortformer implementation. No token, no extra toolkit.
+
+CUDA has no equally free path, so pick one:
+
+**Option A, pyannote (MIT, easy install, needs a token).** Gated on Hugging
+Face (`gated=auto`), so the weights 401 without one:
 
 1. Accept the terms for `pyannote/speaker-diarization-3.1` and `pyannote/segmentation-3.0`.
 2. Put `HF_TOKEN=...` in `config/secrets/secrets.env`.
 3. `<speech venv>/Scripts/python -m pip install pyannote.audio`
 
-Without it, transcription still works and every word is labelled `spk_0`. That
+Note this pulls torch into the speech venv, which otherwise has none
+(faster-whisper runs on CTranslate2). Re-pin `torch==...+cu124` afterwards if
+pip resolves a CPU build, the same fixup MMAudio needs.
+
+**Option B, the same Sortformer model macOS uses (no token, but NeMo).**
+`nvidia/diar_sortformer_4spk-v1` is ungated, but `transformers` does **not**
+implement Sortformer. Its `config.json` advertises
+`transformers_version: 5.0.0.dev0` and `architectures: ['SortformerOffline']`,
+which is from an unmerged branch: there is no `models/sortformer` in the 5.17
+release or in git main. Loading the `.nemo` checkpoint therefore needs
+`nemo_toolkit[asr]`, which is a heavy dependency and imperfectly supported on
+Windows.
+
+**Licensing matters in this choice.** `nvidia/diar_sortformer_4spk-v1` is
+**cc-by-nc-4.0 (non-commercial)**; pyannote is MIT. The macOS default is the
+MLX port of the NC model, so a commercially published podcast has a licensing
+problem on *both* platforms, not just this one. That is an argument for moving
+both to pyannote rather than matching the macOS default.
+
+With neither installed, transcription still works and every word is labelled `spk_0`. That
 is the same behaviour as the MLX Whisper path, but multi-speaker stages will not
 be able to tell your speakers apart, so install it for real interviews.
 
