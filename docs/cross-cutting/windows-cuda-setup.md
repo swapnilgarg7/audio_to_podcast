@@ -3,7 +3,7 @@
 The shipped bootstrap targets **macOS Apple Silicon** and builds MLX stacks for
 local STT, diarization, and the volley-framer LLM. MLX is Apple-only. This page
 covers the CUDA/CPU equivalents that satisfy the same pipeline contracts, so the
-67-stage pipeline runs unchanged on a Windows + NVIDIA host.
+72-stage pipeline runs unchanged on a Windows + NVIDIA host.
 
 Nothing here is Windows-only by design: the same substitutions apply to a Linux
 CUDA box. The MLX path stays the default wherever MLX imports.
@@ -36,8 +36,8 @@ winget install Gyan.FFmpeg
 winget install OpenJS.NodeJS.LTS        # if Node is not already present
 ```
 
-An NVIDIA driver supporting CUDA 12.x. The CUDA **toolkit** is not needed — the
-torch and `nvidia-*-cu12` wheels ship their own runtime libraries.
+An NVIDIA driver supporting CUDA 12.x. The CUDA **toolkit** is not needed:
+torch and the `nvidia-*-cu12` wheels ship their own runtime libraries.
 
 **Python 3.11 for DeepFilterNet.** `DeepFilterLib` publishes prebuilt wheels only
 up to cp311. Its venv is isolated from the core 3.12 venv, so running it on 3.11
@@ -59,14 +59,14 @@ exports `PYTHONUTF8=1`; set it globally for direct `pytest` / CLI runs:
 **MAX_PATH.** Windows caps paths at 260 characters. `torch`'s ATen headers have
 very long names, so `pip install torch` fails outright inside a deep repo path
 (a cloud-synced folder is usually deep enough). Keep the heavy stacks on a short
-path — see below. Enabling `HKLM\...\FileSystem\LongPathsEnabled` also works but
+path, as described below. Enabling `HKLM\...\FileSystem\LongPathsEnabled` also works but
 needs admin and does not address cloud sync.
 
 ---
 
 ## Where the heavy stacks live
 
-Venvs, model weights, and upstream clones total roughly **25 GB**. They belong
+Venvs, model weights, and upstream clones total roughly **45 GB** (measured: musicgen 15, llm 11, mmaudio 6, chatterbox 5.5, deepfilter 4.7, speech 2.3). They belong
 off the repo volume: short paths dodge MAX_PATH, and a cloud-synced repo folder
 should not be syncing model weights.
 
@@ -96,7 +96,7 @@ committed defaults.
 
 ## Bootstrap
 
-From **Git Bash** (not PowerShell — the scripts are bash):
+From **Git Bash**, not PowerShell (the scripts are bash):
 
 ```bash
 ./scripts/bootstrap_venv_windows.sh
@@ -148,7 +148,7 @@ computes in fp16. STT uses `int8_float16`; override with `MUX_STT_DEVICE` /
 ## Diarization
 
 The MLX path uses Sortformer. The CUDA path uses pyannote, which is **not
-installed by default** — it is gated on Hugging Face and needs an account:
+installed by default**. It is gated on Hugging Face and needs an account:
 
 1. Accept the terms for `pyannote/speaker-diarization-3.1` and `pyannote/segmentation-3.0`.
 2. Put `HF_TOKEN=...` in `config/secrets/secrets.env`.
@@ -156,7 +156,7 @@ installed by default** — it is gated on Hugging Face and needs an account:
 
 Without it, transcription still works and every word is labelled `spk_0`. That
 is the same behaviour as the MLX Whisper path, but multi-speaker stages will not
-be able to tell your speakers apart — install it for real interviews.
+be able to tell your speakers apart, so install it for real interviews.
 
 `MUX_STT_DIARIZATION=0` disables diarization explicitly.
 
@@ -173,5 +173,10 @@ be able to tell your speakers apart — install it for real interviews.
 - **`lsof` / `ps -ax`** port and orphan cleanup in `run.sh` is skipped on Windows
   (guarded by `command -v`). A stale server on the web port must be killed
   manually.
-- **`facebook/musicgen-medium`** ships both `.bin` and safetensors; the cache
-  holds ~13.7 GB for that one model. Deleting the `.bin` blobs is safe.
+- **HF cache duplication on Windows.** Without symlink support the hub copies
+  each file into `snapshots/` as well as `blobs/`, so a model can occupy twice
+  its size. An interrupted download also leaves a `*.incomplete` blob and can
+  strand a second revision holding only `model.safetensors` with no config.
+  Check `refs/main` for the live revision, then delete `*.incomplete` blobs and
+  any snapshot revision it does not point at. This reclaimed 13.4 GB from
+  musicgen-medium alone; verify afterwards with `HF_HUB_OFFLINE=1`.

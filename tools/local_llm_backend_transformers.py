@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CUDA/CPU local-LLM backend (transformers) — same stdin/stdout contract as MLX.
+"""CUDA/CPU local-LLM backend (transformers) with the MLX stdin/stdout contract.
 
 Used on hosts without MLX (Windows / Linux / Intel Mac). ``local_llm_infer.py``
 prefers ``mlx_lm`` when it imports and falls back here, so the

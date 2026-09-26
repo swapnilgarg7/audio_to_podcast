@@ -74,13 +74,13 @@ if [[ -x "$PY311" ]]; then
   fi
   DF_PY="$(mux_venv_python "$DF_VENV")"
   "$DF_PY" -m pip install -q -U pip setuptools wheel
-  # df.io imports torchaudio.backend, removed after 2.5.x — keep the pin.
+  # df.io imports torchaudio.backend, removed after 2.5.x, so keep the pin.
   "$DF_PY" -m pip install -q torch==2.5.1 torchaudio==2.5.1 --index-url "$TORCH_INDEX"
   "$DF_PY" -m pip install -q "numpy<2" "soundfile>=0.13.1" deepfilternet
   "$DF_PY" "$ROOT/tools/deepfilter_enhance.py" --verify \
-    || echo "WARN: DeepFilterNet verify failed — preclean unavailable."
+    || echo "WARN: DeepFilterNet verify failed. Preclean unavailable."
 else
-  echo "WARN: Python 3.11 not found at $PY311 — skipping DeepFilterNet."
+  echo "WARN: Python 3.11 not found at $PY311. Skipping DeepFilterNet."
   echo "      DeepFilterLib has no cp312 wheel; install 3.11 or set PYTHON311=."
 fi
 
@@ -123,7 +123,7 @@ LLM_PY="$(mux_venv_python "$LLM_VENV")"
 if [[ "${BOOTSTRAP_SKIP_MODELS:-0}" != "1" ]]; then
   echo "--- Downloading model weights (several GB) ---"
   "$CORE_PY" "$ROOT/scripts/download_local_models_cuda.py" || \
-    echo "WARN: weight download incomplete — rerun scripts/download_local_models_cuda.py"
+    echo "WARN: weight download incomplete. Rerun scripts/download_local_models_cuda.py"
 fi
 
 echo ""

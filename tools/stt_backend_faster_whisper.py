@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CUDA/CPU STT backend (faster-whisper) — same words contract as the MLX path.
+"""CUDA/CPU STT backend (faster-whisper) with the MLX path's words contract.
 
 Used on hosts without MLX (Windows / Linux / Intel Mac). ``stt_transcribe.py``
 prefers ``mlx_audio`` when it imports and falls back here, so the
@@ -28,7 +28,7 @@ def _add_cuda_dll_dirs() -> None:
 
     CTranslate2 resolves cuBLAS/cuDNN with a bare ``LoadLibrary`` from its own
     C++ code, which ignores ``os.add_dll_directory`` and uses the process DLL
-    search order instead. So prepend the wheel bin dirs to PATH as well —
+    search order instead. So prepend the wheel bin dirs to PATH as well, because
     ``add_dll_directory`` alone leaves ``cublas64_12.dll`` unfound.
     """
     global _DLL_DIRS_ADDED
@@ -67,7 +67,7 @@ def resolve_model_id(model_id: str) -> str:
         return _MODEL_ALIASES[raw]
     low = raw.lower()
     if low.startswith("mlx-community/"):
-        # Unknown MLX id — fall back on the size hint in its name.
+        # Unknown MLX id, so fall back on the size hint in its name.
         for needle, size in (
             ("large-v3-turbo", "large-v3-turbo"),
             ("large-v3", "large-v3"),

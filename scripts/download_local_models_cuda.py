@@ -28,7 +28,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from interview_mux.config import merged_config, repo_root  # noqa: E402
 from interview_mux.local_runtime import resolve_venv_python  # noqa: E402
 
-#: 3B instruct model, ungated mirror — ~2.5 GB in 4-bit NF4 on a 6 GB card.
+#: 3B instruct model, ungated mirror. ~2.5 GB in 4-bit NF4 on a 6 GB card.
 DEFAULT_LLM_MODEL = "unsloth/Llama-3.2-3B-Instruct"
 #: faster-whisper resolves this size name to a CTranslate2 repo on the hub.
 DEFAULT_STT_MODEL = "large-v3-turbo"
