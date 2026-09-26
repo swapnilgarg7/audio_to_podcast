@@ -6,16 +6,25 @@ require_core_venv() {
   local root="${1:?root required}"
   local venv="$root/.venv"
 
-  if [[ ! -x "$venv/bin/python" ]]; then
+  # bin/ on POSIX, Scripts/ on Windows (Git Bash / MSYS).
+  local activate=""
+  if [[ -x "$venv/bin/python" ]]; then
+    activate="$venv/bin/activate"
+  elif [[ -x "$venv/Scripts/python.exe" ]]; then
+    activate="$venv/Scripts/activate"
+  fi
+
+  if [[ -z "$activate" ]]; then
     echo "" >&2
     echo "ERROR: No .venv — run setup first:" >&2
-    echo "  ./scripts/bootstrap_venv.sh" >&2
+    echo "  ./scripts/bootstrap_venv.sh          # macOS Apple Silicon" >&2
+    echo "  ./scripts/bootstrap_venv_windows.sh  # Windows / Linux + NVIDIA" >&2
     echo "" >&2
     return 1
   fi
 
   # shellcheck source=/dev/null
-  source "$venv/bin/activate"
+  source "$activate"
 
   if ! python -c "import interview_mux" 2>/dev/null; then
     echo "ERROR: broken .venv — re-run: ./scripts/bootstrap_venv.sh" >&2

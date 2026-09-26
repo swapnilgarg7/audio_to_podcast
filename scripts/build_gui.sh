@@ -14,6 +14,9 @@ fi
 _python_for_verify() {
   if [[ -x "$ROOT/.venv/bin/python" ]]; then
     echo "$ROOT/.venv/bin/python"
+  elif [[ -x "$ROOT/.venv/Scripts/python.exe" ]]; then
+    # Windows venv layout (Git Bash / MSYS).
+    echo "$ROOT/.venv/Scripts/python.exe"
   elif command -v python3.12 >/dev/null 2>&1; then
     command -v python3.12
   else
