@@ -6652,6 +6652,121 @@ the maintainer, not a failure.
 
 ---
 
+## [186] PRODUCT: the cut-location rework (5010ba067) left six ways to stop master.wav, and its edge repair cut speech mid-sentence (maintainer's report, review of upstream 5010ba067 + 8e0b47c04)
+
+**Stage / area:** `artifact_sanitize/one_writer`, `order_hash`, `air_order.mix_outputs_seated`,
+`homunculus/agenda.stage_outputs_present`, `junction_snip_qa`, `edl_overlap_repair`,
+`artifact_completeness.align_manifest_ids_to_boundaries`, `write_staging.approve_stage_writes`,
+`artifact_ownership` remap gate, `stages/understanding` (ideal_cuts span coverage),
+`boundary_edge_score.repair_low_confidence_edges`, `boundary_collate._finished_sentence_gap`,
+stage contract `podcast_publish`
+**Status:** FIXED (blockers); quality items OPEN for the maintainer, listed below
+
+**Seen (maintainer's report):** segments were cut early, sometimes mid-sentence.
+The cut-location rework in 5010ba067 fixed some of that, but every pass found
+another downstream break. A review was requested: is there anything that would
+prevent master.wav? Full suite on upstream 5010ba067: 27 failed; 22 predate it
+(ISSUES 181 family), 4 came from 5010ba067 and 1 from 8e0b47c04.
+
+**Blockers found and fixed:**
+1. *connector_fuse_pass failed on every normal run.* 5010ba067 added 11 paths
+   to `SEGMENT_ID_REMAP_PATHS`; the remap gate runs before the operational-row
+   early return, so the fuse pass's ordinary write of
+   `analysis/high_value_island_clusters.json` (every fuse round, even with zero
+   islands) was refused `mutation_class_required:segment_id_remap`, uncaught.
+   Fix: the remap class is required only when the writing stage is not a
+   producer of the path, and connector_fuse_pass is a declared producer of the
+   clusters file (low_conf_island_scan stays the owner). This is also why
+   `test_declared_producer_is_a_permitted_writer_of_the_input_path` failed.
+2. *Seat-freeze reason suffix skipped End-A writes.* `commit_transitions_doc`
+   and `commit_sound_design_plan_doc` passed `reason="<reason>:<mutation_class>"`;
+   the End-A allowlist and the ISSUES 116 carve-out match exactly, so under a
+   freeze every End-A heal and the sound_design_plan stage's own write were
+   skipped while returning success (the ISSUES 116 loop again). Fix: pass the
+   reason unchanged; admit `mutation_class == "segment_id_remap"` separately.
+3. *An EDL-omitted clip made master_finalize refuse forever.* The drift check
+   now discounts `omitted_unplayable_segment_ids` and returns "stamp" instead
+   of excluding the id from the selection, but `order_hashes_match`, both
+   seated checks and the junction re-align still compared the full selection.
+   `verify_commitment` never reached "committed", so `assert_consumer` stopped
+   junction_snip_qa / master_finalize and `stage_input_checks` refused
+   master_finalize; edl and mix were re-dispatched to the cap. The new
+   `trim_residual_source_overlaps` (drops clips under 400 ms) makes omissions
+   routine. Fix: one helper, `order_hash.seatable_selection_ids`, used by every
+   selection-versus-EDL comparison (drift, lock copy, selection-leads,
+   `order_hashes_match`, both seated checks, the junction re-align, the
+   overlap-repair speech reorder).
+4. *Every flush deleted CTA/NLE split children from the manifest.*
+   `approve_stage_writes` ran `align_manifest_ids_to_boundaries` +
+   `drop_retired_segment_refs` after every stage. Split children live only in
+   the manifest and sit inside the parent span, so they were dropped (and
+   `repair_manifest_segments`' overlap trim drops any row inside its parent);
+   ranking's selection then named ids not in the manifest and the flush was
+   refused on every pass, while chapters lost the child ids. Fix: align only
+   on a flush that wrote `segments/boundaries.json`; the align keeps split
+   children whose parent is still a boundary row and adds them after the
+   repair.
+5. *Span coverage could raise.* Redistribution no longer falls back to a
+   time-only window when a probe point lands in a short sentence, so the
+   `ideal_cuts_propose span coverage < 0.45` RuntimeError became reachable on
+   tapes of 15 minutes or more. Coverage is a quality judgement (ISSUES 185):
+   now a warning.
+6. *podcast_publish contract drift (8e0b47c04).* The YAML was hand-edited;
+   regenerated from `tools/bootstrap_stage_contracts.py` (the verify script
+   would have reverted it anyway). Ownership already lets both stages write the
+   four publish files.
+
+**Cut quality fixed (it worked against the rework's own goal):**
+7. *Edge repair moved boundaries mid-sentence and lost speech.* The new cap
+   `overall = min(overall, 0.4)` for any edge below a 0.95 legal score grades
+   most edges `reject` (any open on "And/So/But"), so repair runs on nearly
+   all of them and accepts plain word-edge candidates; the nudge moves one
+   side only. On the 47-minute granola transcript: 135 rejects (baseline 3),
+   81 nudges, 148 words of real speech in no segment, segments opening on
+   "you for coming and joining us". Fix: a nudge may not shrink a row over
+   non-filler words. Same transcript after the fix: 26 nudges, 11 words lost
+   (all "Um"; baseline lost 33), stable by pass 3.
+8. *`_finished_sentence_gap` read the wrong next words.* The next side took
+   the last 16 words of a 30 s window instead of the first 16 after the cut.
+
+**OPEN for the maintainer (quality, not blocking; verified by the review):**
+- Config overrides the new code defaults: `analysis.ideal_cuts.semantic_edge_buffer_ms`
+  is 5000 and `max_cut_ms` 180000 in `config/app.defaults.json`, the same for
+  `chapter_close_hitch.max_cut_ms`, and `junction_snip_qa.phrase_extend_max_ms` /
+  `thought_complete_max_ms` stay 24000. config-keys.md documents 30000 / unset,
+  so the new windows are not in effect.
+- The 0.4 edge cap still grades about 90% of edges `reject` (GUI review queue
+  of ~255 items on granola); it no longer moves speech, but the grade is noise.
+- `_finished_sentence_gap` returns False for abutting rows (gap 0), so
+  same-speaker concept splits are still merged by `merge_same_speaker_boundary`.
+- Backchannel split triggers on "right/sure/okay" anywhere in a sentence, with
+  no speaker or pause check.
+- Spine windows and topic hints call the hinge predicates over all words per
+  word: about 50 s each on 9,335 words, quadratic in tape length.
+- `investigate_forward_cut` and `is_legal_conceptual_hinge` disagree (a cut the
+  placer accepts, the checkers call a hang).
+- `resolve_keeper_air_bounds`: on a reorder, each keeper is capped by the
+  other's raw (not resolved) bound, so tape plays twice; overlong keepers are
+  no longer trimmed (a 288 s slab airs whole).
+- `fold_following_segments_into_chapters` folds unowned manifest rows (CTA,
+  omitted) into chapters, appends them out of tape order, and drops emptied
+  chapters without remapping their ids.
+- `resolve_cut_overlaps` keeps pieces down to 80 ms with the parent's priority
+  (a one-word must_keep tail).
+- Hitch layup adopt failure is rewritten to ok=True, so its heal route never
+  fires and the block moves to `edl`.
+- Host-frame protection now overrides `diarization_yes_same` /
+  `micro_other_absorb` (the comment below it still says yes_same is the
+  exception); `test_micro_keeper_fuse` fails on this. Mis-diarized "mm-hm"
+  islands now keep guest sentences split.
+- `kept_source_gap` can put 8 to 30 s of silence into the master between
+  chapters, which junction_snip_qa then flags as dead air.
+- Some tests were loosened to pass (`start >= -18000`, a cut ending on "and").
+
+Tests: `tests/test_omitted_clip_seated.py` (2), `tests/test_edge_nudge_keeps_speech.py` (3),
+`tests/test_halt_safe_id_align.py` (+1, split children); the freeze, contract
+and ownership tests that 5010ba067 broke pass again.
+
 # Planned: prune the job-API driver (phase 2 of entry 79)
 
 Sized on 2026-09-30 after the engine proofs (exec_062 full-auto, exec_064

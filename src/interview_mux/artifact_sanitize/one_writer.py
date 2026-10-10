@@ -249,8 +249,10 @@ def commit_transitions_doc(
     try:
         from interview_mux.seat_authority import frozen_seat_write_allowed
 
-        if not frozen_seat_write_allowed(
-            ctx, TRANSITIONS_REL, reason=f"{enda_reason}:{mutation_class or ''}"
+        # The End-A reason is matched exactly; a segment id remap is admitted
+        # on its own and never by suffixing the reason.
+        if mutation_class != "segment_id_remap" and not frozen_seat_write_allowed(
+            ctx, TRANSITIONS_REL, reason=enda_reason
         ):
             return ctx.final_path(*TRANSITIONS_REL.split("/"))
     except ImportError:
@@ -328,8 +330,10 @@ def commit_sound_design_plan_doc(
     try:
         from interview_mux.seat_authority import frozen_seat_write_allowed
 
-        if not frozen_seat_write_allowed(
-            ctx, SDP_REL, reason=f"{enda_reason}:{mutation_class or ''}"
+        # The End-A reason is matched exactly; a segment id remap is admitted
+        # on its own and never by suffixing the reason.
+        if mutation_class != "segment_id_remap" and not frozen_seat_write_allowed(
+            ctx, SDP_REL, reason=enda_reason
         ):
             return ctx.final_path(*SDP_REL.split("/"))
     except ImportError:

@@ -457,9 +457,14 @@ def run_ideal_cuts_propose(ctx: RunContext) -> None:
                 )
                 ratio = cut_span_coverage_ratio(doc, duration_ms)
                 if ratio < floor:
-                    raise RuntimeError(
+                    # Span coverage is a quality judgement, never a refusal.
+                    # Redistribution only opens whole-sentence windows, so a
+                    # probe point inside a short sentence adds nothing.
+                    c.log(
                         f"ideal_cuts_propose span coverage {ratio:.3f} < min {floor:.3f} "
-                        f"(cuts clustered early — redistribute across the interview)"
+                        f"after redistribution; continuing with the proposed cuts",
+                        level="warning",
+                        stage="ideal_cuts_propose",
                     )
                 c.log(
                     f"ideal_cuts_propose redistributed clustered cuts to span {ratio:.3f}",

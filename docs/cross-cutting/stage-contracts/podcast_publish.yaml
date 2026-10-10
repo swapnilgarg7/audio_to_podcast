@@ -14,6 +14,14 @@ outputs:
   staging: false
 - path: publish/publish_result.json
   staging: true
+- path: publish/chapters.json
+  staging: true
+- path: publish/transcript.vtt
+  staging: true
+- path: publish/episode.json
+  staging: true
+- path: publish/description.txt
+  staging: true
 inputs:
   hard:
   - path: master/master.wav
@@ -24,14 +32,6 @@ inputs:
     producer: episode_cover_generate
   - path: master/transcript.vtt
     producer: master_transcript_build
-  - path: publish/chapters.json
-    producer: episode_cover_generate
-  - path: publish/transcript.vtt
-    producer: episode_cover_generate
-  - path: publish/episode.json
-    producer: episode_cover_generate
-  - path: publish/description.txt
-    producer: episode_cover_generate
   soft:
   - path: master/edl.json
     producer: edl

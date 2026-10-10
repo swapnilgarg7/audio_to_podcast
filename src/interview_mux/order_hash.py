@@ -144,8 +144,11 @@ def order_hashes_match(
     """True when selection and EDL agree on air order (hash or list equality)."""
     if not isinstance(selection, dict) or not isinstance(edl, dict):
         return False
-    sel_ids = [str(s) for s in (selection.get("ordered_segment_ids") or []) if s]
-    edl_ids = [str(s) for s in (edl.get("ordered_segment_ids") or []) if s]
+    # Ids the EDL omitted as unplayable stay in the selection while the EDL
+    # list drops them. Without this filter verify_commitment never reached
+    # "committed" and master_finalize was refused on every pass.
+    sel_ids = seatable_selection_ids(selection, edl)
+    edl_ids = seatable_selection_ids(edl, edl)
     # Air-order list equality is authoritative. Recompute hashes so a stale
     # order_content_hash field cannot false-fail commitment checks.
     if sel_ids != edl_ids:
@@ -179,6 +182,32 @@ def _is_subsequence(small: list[str], big: list[str]) -> bool:
     return all(item in it for item in small)
 
 
+def seatable_selection_ids(
+    selection: dict[str, Any] | None,
+    edl: dict[str, Any] | None,
+    *,
+    use_lock: bool = False,
+) -> list[str]:
+    """Selection ids the EDL must seat: the lock or ordered ids, minus EDL omissions.
+
+    Every selection-versus-clips comparison goes through here. A clip the EDL
+    omitted as unplayable stays in the selection, so a comparison that skips
+    this filter never sees the EDL as seated and re-dispatches edl and mix.
+    """
+    sel = selection if isinstance(selection, dict) else {}
+    omitted = {
+        str(s)
+        for s in ((edl or {}).get("omitted_unplayable_segment_ids") or [])
+        if s
+    } if isinstance(edl, dict) else set()
+    ids: list[Any] = []
+    if use_lock:
+        ids = list((get_order_lock(sel) or {}).get("ordered_segment_ids") or [])
+    if not ids:
+        ids = list(sel.get("ordered_segment_ids") or [])
+    return [str(s) for s in ids if s and str(s) not in omitted]
+
+
 def order_drift_heal_action(
     selection: dict[str, Any] | None,
     edl: dict[str, Any] | None,
@@ -192,16 +221,7 @@ def order_drift_heal_action(
     """
     if not isinstance(selection, dict) or not isinstance(edl, dict):
         return "rebuild"
-    omitted = {
-        str(s)
-        for s in (edl.get("omitted_unplayable_segment_ids") or [])
-        if s
-    }
-    sel_ids = [
-        str(s)
-        for s in (selection.get("ordered_segment_ids") or [])
-        if s and str(s) not in omitted
-    ]
+    sel_ids = seatable_selection_ids(selection, edl)
     clip_ids = edl_speech_clip_ids(edl)
     if clip_ids and clip_ids != sel_ids:
         clip_set = set(clip_ids)
@@ -221,14 +241,7 @@ def copy_order_lock_if_clips_match(
     edl: dict[str, Any],
 ) -> dict[str, Any]:
     """Copy selection lock onto EDL only when speech clips already equal selection ids."""
-    omitted = {
-        str(s) for s in (edl.get("omitted_unplayable_segment_ids") or []) if s
-    }
-    sel_ids = [
-        str(s)
-        for s in (selection.get("ordered_segment_ids") or [])
-        if s and str(s) not in omitted
-    ]
+    sel_ids = seatable_selection_ids(selection, edl)
     clip_ids = edl_speech_clip_ids(edl)
     if clip_ids and clip_ids != sel_ids:
         raise ValueError(
@@ -246,14 +259,7 @@ def assert_selection_leads_edl(
     edl: dict[str, Any],
 ) -> None:
     """Fail closed when EDL diverges from selection — never rewrite selection from EDL."""
-    omitted = {
-        str(s) for s in (edl.get("omitted_unplayable_segment_ids") or []) if s
-    }
-    sel_ids = [
-        str(s)
-        for s in (selection.get("ordered_segment_ids") or [])
-        if s and str(s) not in omitted
-    ]
+    sel_ids = seatable_selection_ids(selection, edl)
     clip_ids = edl_speech_clip_ids(edl)
     if clip_ids and clip_ids != sel_ids:
         raise ValueError(

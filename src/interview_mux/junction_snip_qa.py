@@ -3748,7 +3748,10 @@ def run_junction_snip_qa(ctx: RunContext) -> None:
                 )
                 # Align EDL ordered ids to selection (selection leads).
                 current_edl = dict(current_edl)
-                current_edl["ordered_segment_ids"] = list(sel.get("ordered_segment_ids") or [])
+                # Ids the EDL omitted as unplayable stay omitted.
+                from interview_mux.order_hash import seatable_selection_ids
+
+                current_edl["ordered_segment_ids"] = seatable_selection_ids(sel, current_edl)
                 current_edl = copy_order_lock(sel, stamp_order_hash(current_edl))
                 try:
                     assert_selection_leads_edl(sel, current_edl)

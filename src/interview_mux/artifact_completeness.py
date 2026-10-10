@@ -761,15 +761,31 @@ def align_manifest_ids_to_boundaries(ctx: RunContext) -> bool:
             manifest = dict(loaded)
     existing = manifest.get("segments") if isinstance(manifest.get("segments"), list) else []
     aligned = aligned_manifest_segments(rows, existing)
+    # NLE/CTA split children live in the manifest only, never in the
+    # boundaries, and each sits inside its parent's span. Rebuilding from the
+    # boundaries alone deleted them, so ranking's selection named ids the
+    # manifest no longer had and every flush was refused.
+    boundary_ids = {str(s.get("segment_id")) for s in aligned if s.get("segment_id")}
+    by_existing = {
+        str(s.get("segment_id")): s
+        for s in existing
+        if isinstance(s, dict) and s.get("segment_id")
+    }
+    kept_children = _kept_split_child_ids(ctx, by_existing, boundary_ids)
+    children = [
+        dict(by_existing[sid])
+        for sid in sorted(kept_children)
+        if sid in by_existing and sid not in boundary_ids
+    ]
     old_ids = {
         str(s.get("segment_id"))
         for s in existing
         if isinstance(s, dict) and s.get("segment_id")
     }
-    new_ids = {str(s.get("segment_id")) for s in aligned if s.get("segment_id")}
+    new_ids = {str(s.get("segment_id")) for s in aligned + children if s.get("segment_id")}
     if old_ids == new_ids and existing:
         return False
-    if existing and len(aligned) < len(existing):
+    if existing and len(aligned) + len(children) < len(existing):
         def _mid_covered(seg: dict[str, Any]) -> bool:
             try:
                 mid = (int(seg.get("start_ms") or 0) + int(seg.get("end_ms") or 0)) // 2
@@ -818,6 +834,13 @@ def align_manifest_ids_to_boundaries(ctx: RunContext) -> bool:
     from interview_mux.write_staging import write_committed_json
 
     repaired, _notes = repair_manifest_segments(ctx, manifest)
+    if children:
+        # After the repair: its overlap trim drops any row inside its parent.
+        repaired = dict(repaired)
+        repaired["segments"] = sorted(
+            list(repaired.get("segments") or []) + children,
+            key=lambda s: (int(s.get("start_ms") or 0), int(s.get("end_ms") or 0)),
+        )
     write_committed_json(
         ctx,
         "segments/manifest.json",

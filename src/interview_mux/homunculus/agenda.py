@@ -931,17 +931,14 @@ def stage_outputs_present(ctx: RunContext, stage: str) -> bool:
                 not in {"ok", "stamp"}
             ):
                 return False
-            from interview_mux.order_hash import edl_speech_clip_ids, get_order_lock
+            from interview_mux.order_hash import edl_speech_clip_ids, seatable_selection_ids
 
-            lock = get_order_lock(sel if isinstance(sel, dict) else {}) or {}
-            lock_ids = [str(s) for s in (lock.get("ordered_segment_ids") or []) if s]
             clip_ids = edl_speech_clip_ids(edl_doc if isinstance(edl_doc, dict) else {})
-            sel_ids = [
-                str(s)
-                for s in ((sel or {}).get("ordered_segment_ids") or [])
-                if s
-            ] if isinstance(sel, dict) else []
-            seated = lock_ids or sel_ids
+            seated = seatable_selection_ids(
+                sel if isinstance(sel, dict) else None,
+                edl_doc if isinstance(edl_doc, dict) else None,
+                use_lock=True,
+            )
             if clip_ids and seated and clip_ids != seated:
                 return False
         except Exception:

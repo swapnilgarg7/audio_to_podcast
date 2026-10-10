@@ -1158,7 +1158,10 @@ def repair_overlapping_source_ranges(
     # took opposite branches; ISSUES 176).
     try:
         sel_now = ctx.read_json("master/selection.json") if ctx.artifact_exists("master/selection.json") else None
-        sel_order = [str(x) for x in ((sel_now or {}).get("ordered_segment_ids") or []) if x]
+        from interview_mux.order_hash import seatable_selection_ids
+
+        # Omitted ids are not clips; leaving them in made the reorder a no-op.
+        sel_order = seatable_selection_ids(sel_now, working)
         reordered = _reorder_speech_blocks(working.get("clips") or [], sel_order)
         if reordered is not None:
             working["clips"] = _drop_non_adjacent_transitions(reordered)

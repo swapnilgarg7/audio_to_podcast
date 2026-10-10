@@ -871,17 +871,19 @@ def mix_outputs_seated(ctx: RunContext) -> bool:
     sel_ids = [str(s) for s in (sel.get("ordered_segment_ids") or []) if s]
     if not sel_ids:
         return True
-    from interview_mux.order_hash import edl_speech_clip_ids, get_order_lock, order_drift_heal_action
+    from interview_mux.order_hash import (
+        edl_speech_clip_ids,
+        order_drift_heal_action,
+        seatable_selection_ids,
+    )
 
     if (
         order_drift_heal_action(sel, edl if isinstance(edl, dict) else None)
         not in {"ok", "stamp"}
     ):
         return False
-    lock = get_order_lock(sel) or {}
-    lock_ids = [str(s) for s in (lock.get("ordered_segment_ids") or []) if s]
     clip_ids = edl_speech_clip_ids(edl if isinstance(edl, dict) else {})
-    seated = lock_ids or sel_ids
+    seated = seatable_selection_ids(sel, edl if isinstance(edl, dict) else None, use_lock=True)
     if clip_ids and seated and clip_ids != seated:
         return False
     return True

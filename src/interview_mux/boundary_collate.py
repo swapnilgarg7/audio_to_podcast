@@ -175,7 +175,13 @@ def _drop_coarse_dominated_rows(
     return kept, applied
 
 
-def _phrase_in_span(words: list[dict[str, Any]] | None, start_ms: int, end_ms: int) -> str:
+def _phrase_in_span(
+    words: list[dict[str, Any]] | None,
+    start_ms: int,
+    end_ms: int,
+    *,
+    head: bool = False,
+) -> str:
     toks: list[str] = []
     for word in words or []:
         if not isinstance(word, dict):
@@ -189,7 +195,8 @@ def _phrase_in_span(words: list[dict[str, Any]] | None, start_ms: int, end_ms: i
         tok = str(word.get("text") or word.get("word") or "").strip()
         if tok:
             toks.append(tok)
-    return " ".join(toks[-16:])
+    # The words after a cut are its head; the words before it are its tail.
+    return " ".join(toks[:16] if head else toks[-16:])
 
 
 def _finished_sentence_gap(
@@ -205,7 +212,7 @@ def _finished_sentence_gap(
     if not words or next_start_ms <= prev_end_ms:
         return False
     prev = _phrase_in_span(words, max(0, prev_end_ms - 30_000), prev_end_ms + 1)
-    nxt = _phrase_in_span(words, next_start_ms, next_start_ms + 30_000)
+    nxt = _phrase_in_span(words, next_start_ms, next_start_ms + 30_000, head=True)
     if not prev or not nxt:
         return False
     from interview_mux.gap_vo_prior_context import concept_cut_allowed

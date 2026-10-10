@@ -747,7 +747,14 @@ _CATALOG_SEED: tuple[ArtifactRow, ...] = (
     _row("analysis/connector_fuse_split_island_qc.json", "connector_fuse_pass", mode="operational"),
     _row("analysis/connector_seam_packets.json", "connector_fuse_pass", mode="operational"),
     _row("analysis/connector_seam_verdicts.json", "connector_fuse_pass", mode="operational"),
-    _row("analysis/high_value_island_clusters.json", "low_conf_island_scan", mode="operational"),
+    # connector_fuse_pass regroups the clusters every fuse round
+    # (segment_fuse.run_high_value_cluster_fuse_rounds); scan stays the owner.
+    _row(
+        "analysis/high_value_island_clusters.json",
+        "connector_fuse_pass",
+        "low_conf_island_scan",
+        mode="operational",
+    ),
     _row("analysis/high_value_speech_boosts.json", "low_conf_island_scan", mode="operational"),
     _row("analysis/high_value_speech_islands.json", "low_conf_island_scan", mode="operational"),
     _row("analysis/island_cluster_structure_packets.json", "low_conf_island_scan", mode="operational"),
@@ -2139,10 +2146,12 @@ def write_permitted(
     # Remap authority is narrower than producer authority. Every persist made by
     # a remap stage on the shared walker surface must identify the integrity-only
     # mutation class declared by its ALLOW row — except hitch chapter adopt.
+    # A remap stage writing a file it produces itself is not a remap.
     if (
         verb == "persist"
         and stage in SEGMENT_ID_REMAP_STAGES
         and rel in SEGMENT_ID_REMAP_PATHS
+        and stage not in row.producers
     ):
         if mutation == "hitch_chapter_authority" and rel == "master/narrative_plan.json":
             pass  # hitch chapter adopt ALLOW (not pure id remap)

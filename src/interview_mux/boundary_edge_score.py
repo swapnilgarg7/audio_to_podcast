@@ -490,6 +490,25 @@ def _candidate_hinge_times(
     return sorted(set(cands))
 
 
+_NUDGE_FILLERS = frozenset({"um", "uh", "umm", "uhh", "er", "erm", "ah", "hmm", "mm", "mhm"})
+
+
+def _nudge_drops_speech(words: list[dict[str, Any]], lo_ms: int, hi_ms: int) -> bool:
+    """True when a word other than a filler sits between the old and new edge.
+
+    The nudge moves one side of one row only, so a shrink leaves those words
+    in no segment, and the new edge opens or closes mid-sentence.
+    """
+    for w in words:
+        try:
+            mid = (int(w["start_ms"]) + int(w["end_ms"])) // 2
+        except (KeyError, TypeError, ValueError):
+            continue
+        if lo_ms < mid < hi_ms and _tok(w).strip(".,!?;:-").lower() not in _NUDGE_FILLERS:
+            return True
+    return False
+
+
 def repair_low_confidence_edges(
     rows: list[dict[str, Any]],
     *,
@@ -543,7 +562,14 @@ def repair_low_confidence_edges(
                 for t in _candidate_hinge_times(
                     words, center_ms=t0, window_ms=window, edge=edge_name
                 )
-                if hard_lo <= t <= hard_hi and t != t0
+                if hard_lo <= t <= hard_hi
+                and t != t0
+                and not (
+                    edge_name == "end" and t < t0 and _nudge_drops_speech(words, t, t0)
+                )
+                and not (
+                    edge_name == "start" and t > t0 and _nudge_drops_speech(words, t0, t)
+                )
             ]
             best_t = None
             best_score = overall
