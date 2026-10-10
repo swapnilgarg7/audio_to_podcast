@@ -272,6 +272,19 @@ def _refuse_delivery_timeline_rewind(ctx: RunContext, stage: str, *, action: str
     # (e.g. content_brief archived by a heal; seed-order still needs content_context).
     if not has_art:
         return
+    # A stage whose own output is still incomplete never finished, so running
+    # it is not a rewind. content_context writes content_brief.json with empty
+    # topics[].segment_ids and content_brief_reanchor fills them after G0; the
+    # file existing used to refuse reanchor while the heal below refused the
+    # mark, and framing_posture_decide waited on it until the identical cap.
+    if not ctx.is_done(stage):
+        try:
+            from interview_mux.stage_completion import stage_artifact_incompleteness
+
+            if stage_artifact_incompleteness(ctx, stage):
+                return
+        except Exception:
+            pass
     from interview_mux.delivery_guardrails import seed_stage_complete
 
     if not seed_stage_complete(ctx, stage):

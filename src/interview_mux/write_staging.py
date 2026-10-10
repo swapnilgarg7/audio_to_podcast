@@ -108,6 +108,53 @@ def active_stage_id() -> str | None:
     return _active_stage.get()
 
 
+def _open_nested_stage_row(ctx: RunContext, stage_id: str) -> bool:
+    """Append a ``started`` stage row unless one is already open for ``stage_id``."""
+    try:
+        from interview_mux.homunculus.ledger import append_ledger, read_ledger
+        from interview_mux.homunculus.runtime import has_dispatch_ledger
+
+        from interview_mux.homunculus.budget import attempt_cap
+
+        if not has_dispatch_ledger(ctx):
+            return False
+        # mix / master_finalize / complete_master count stage rows as cycles;
+        # junction's nested mix makes no LLM call and must not spend one.
+        if attempt_cap(stage_id)[1] != "max_invokes_per_identity":
+            return False
+        started = closed = 0
+        for row in read_ledger(ctx):
+            if row.get("identity") != stage_id or row.get("kind") != "stage":
+                continue
+            if row.get("status") == "started":
+                started += 1
+            elif row.get("status") in {"failed", "done"}:
+                closed += 1
+        if started > closed:
+            return False
+        append_ledger(
+            ctx,
+            {"kind": "stage", "identity": stage_id, "status": "started", "source": "nested"},
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _close_nested_stage_row(ctx: RunContext, stage_id: str, opened: bool, status: str) -> None:
+    if not opened:
+        return
+    try:
+        from interview_mux.homunculus.ledger import append_ledger
+
+        append_ledger(
+            ctx,
+            {"kind": "stage", "identity": stage_id, "status": status, "source": "nested"},
+        )
+    except Exception:
+        pass
+
+
 def run_nested_staged_stage(ctx: RunContext, stage_id: str, fn: Any) -> None:
     """Run ``fn`` in ``stage_id`` staging and auto-commit, then restore the parent stage.
 
@@ -116,10 +163,17 @@ def run_nested_staged_stage(ctx: RunContext, stage_id: str, fn: Any) -> None:
     not in the parent's ``STAGE_BY_ID.artifacts``.
     """
     parent = _active_stage.get()
+    # One nested run is one invoke of stage_id. Without an open stage row every
+    # LLM call inside it (each classification shard, each schema retry) was
+    # counted against max_invokes_per_identity, so a 5-shard classification
+    # nested in boundary_topic_resplit was refused at shard 4 (exec_034).
+    ledger_open = _open_nested_stage_row(ctx, stage_id)
+    status = "failed"
     enter_stage_staging(stage_id)
     try:
         fn()
         after_stage_write_check(ctx, stage_id)
+        status = "done"
         # Re-stamp fingerprints for known stage artifacts so downstream stale
         # guards (e.g. sonic_context_build ← content_brief) see a coherent hash
         # even if a post-commit heal rewrote the body under another stage key.
@@ -139,6 +193,8 @@ def run_nested_staged_stage(ctx: RunContext, stage_id: str, fn: Any) -> None:
             enter_stage_staging(parent)
         else:
             exit_stage_staging()
+        # Closed outside the nested staging, which a failed run discards.
+        _close_nested_stage_row(ctx, stage_id, ledger_open, status)
 
 
 def is_operational_path(rel: str) -> bool:

@@ -235,7 +235,13 @@ def _rewind_locked(ctx: RunContext, stage_id: str) -> bool:
         if not needed:
             return False
         # Only locked while the artifacts that make the re-run refusable exist.
-        return all(ctx.artifact_exists(rel) for rel in needed)
+        if not all(ctx.artifact_exists(rel) for rel in needed):
+            return False
+        # The guard lets a stage run while its own output is incomplete for it,
+        # so clearing such a stage leaves a prerequisite it can satisfy.
+        from interview_mux.stage_completion import stage_artifact_incompleteness
+
+        return not stage_artifact_incompleteness(ctx, stage_id)
     except Exception:
         return False
 

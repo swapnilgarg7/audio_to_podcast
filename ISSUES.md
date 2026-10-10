@@ -6767,6 +6767,40 @@ Tests: `tests/test_omitted_clip_seated.py` (2), `tests/test_edge_nudge_keeps_spe
 `tests/test_halt_safe_id_align.py` (+1, split children); the freeze, contract
 and ownership tests that 5010ba067 broke pass again.
 
+## [187] STRUCTURAL: two analysis blockers on the first real run after ISSUES 186 (exec_034, granola, fresh on fe7cef86f)
+
+**Stage / area:** `homunculus/agenda._refuse_delivery_timeline_rewind`,
+`post_decision_sanitize._rewind_locked`, `write_staging.run_nested_staged_stage`
+**Status:** FIXED
+
+**Seen:** exec_034 never reached delivery.
+1. *content_brief_reanchor could never run after G0.* content_context writes
+   `understanding/content_brief.json` with empty `topics[].segment_ids`
+   (nullable for it, critical for reanchor), and reanchor fills them once
+   segments exist, which is always after transcript review. The post-G0 rewind
+   guard refused any protected stage whose artifact merely existed, so it
+   refused reanchor; its heal then refused the mark because the brief is
+   incomplete for reanchor. framing_posture_decide raised "seed order: complete
+   content_brief_reanchor" until the identical-error cap, and delivery was
+   blocked on content_brief_reanchor, framing_posture_decide, missing_framing,
+   gap_framing_compose and delivery_brief_build. Fix: a stage that is not done
+   and whose own output is incomplete for it never finished, so running it is
+   not a rewind. `_rewind_locked` uses the same rule, so clearing such a stage
+   no longer counts as an unsatisfiable prerequisite.
+2. *A nested classification was refused at shard 4 of 5.* boundary_topic_resplit
+   re-runs segment_classification in-process through `run_nested_staged_stage`.
+   With no open stage row in the dispatch ledger, every LLM call inside it was
+   counted as its own invoke, so the 100-segment tape (5 shards of 20) hit
+   `max_invokes_per_identity` (3) at shard 4. Fix: a nested run opens one
+   stage row for its stage and closes it as done or failed after the parent's
+   staging is restored (a failed nested run's staging is discarded). Stages
+   with a cycle cap (mix, master_finalize, complete_master) get no row:
+   junction's nested mix makes no LLM call and must not spend a mix cycle.
+
+Tests: `tests/test_reanchor_runs_after_g0.py` (2),
+`tests/test_nested_stage_one_invoke.py` (2); both fail without the fix (the
+second with the exec_034 `LimitExhausted`).
+
 # Planned: prune the job-API driver (phase 2 of entry 79)
 
 Sized on 2026-09-30 after the engine proofs (exec_062 full-auto, exec_064
