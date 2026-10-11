@@ -260,6 +260,52 @@ def test_commitment_accepts_superseded_earlier_bound_claims(tmp_path):
     assert commitment["repairs_claimed"] == commitment["repairs_committed"] == 2
 
 
+def test_superseded_claim_survives_a_clip_index_shift(tmp_path):
+    """exec_035 seg_017: run 1 recut it at clip 37, a clip inserted before it
+    moved it to 38, run 2 recut and cut it earlier there. The run-1 row is
+    superseded, not a claim the final EDL must still honour."""
+    from interview_mux.seam_autopsy import _applied_repairs_resolved
+
+    edl = {
+        "clips": [
+            {"type": "silence", "duration_ms": 400, "air_kind": "impact_hold"},
+            {"type": "speech", "segment_id": "seg_016", "source_start_ms": 0, "source_end_ms": 494000},
+            {"type": "speech", "segment_id": "seg_017", "source_start_ms": 494400, "source_end_ms": 505180},
+        ]
+    }
+    report = {
+        "applied": [
+            {
+                "status": "applied",
+                "action": "thought_complete_recut",
+                "segment_id": "seg_017",
+                "clip_index": 1,
+                "keep_end_ms": 510640,
+                "applied_ms": 510640,
+            },
+            {
+                "status": "applied",
+                "action": "thought_complete_recut",
+                "segment_id": "seg_017",
+                "clip_index": 2,
+                "keep_end_ms": 510640,
+                "applied_ms": 510640,
+            },
+            {
+                "status": "applied",
+                "action": "cut_earlier",
+                "segment_id": "seg_017",
+                "clip_index": 2,
+                "applied_ms": 505180,
+                "detail": {"recommended_ms": 505180},
+            },
+        ]
+    }
+    resolved, unresolved = _applied_repairs_resolved(edl, report)
+    assert unresolved == []
+    assert len(resolved) == 3
+
+
 def test_commitment_accepts_thought_complete_superseding_nudge(tmp_path):
     ctx, edl = _ctx_with_timeline(tmp_path)
     report = {

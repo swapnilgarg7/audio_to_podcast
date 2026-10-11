@@ -6801,6 +6801,32 @@ Tests: `tests/test_reanchor_runs_after_g0.py` (2),
 `tests/test_nested_stage_one_invoke.py` (2); both fail without the fix (the
 second with the exec_034 `LimitExhausted`).
 
+## [188] STRUCTURAL: junction commitment held a superseded repair to the final EDL after a clip index shift (exec_035, granola, fresh on 6874662c0)
+
+**Stage / area:** `seam_autopsy._applied_repairs_resolved` (feeds `verify_commitment`)
+**Status:** FIXED
+
+**Seen:** exec_035 passed analysis and 61 stages, then junction_snip_qa hard-stopped
+with `junction_commitment_diverged` (`claimed_repairs_missing_from_edl`,
+1 of 99 repairs unresolved: `2:thought_complete_recut:seg_017`). Delivery failed
+on "junction_snip_qa is not complete ahead of mix".
+
+**Cause:** with two remediation runs, only the last bound write per
+(segment, edge, clip_index) must match the final EDL. Run 1 recut seg_017 at
+clip_index 37; a clip inserted earlier in the timeline moved seg_017 to 38,
+where run 2 recut it and then cut it earlier (final end 505180, which the EDL
+has). The run-1 row still had its own key (seg_017, end, 37), so it counted as
+the latest claim and was held to 510640, an end run 2 replaced on purpose.
+Order hash and assembly freshness both matched; this row alone made the
+commitment diverge, which is a hard stop.
+
+**Fix:** clip_index only tells apart the airings of a segment that airs more
+than once. For a segment with one speech clip in the EDL, supersession keys on
+(segment, edge). On exec_035's own EDL and report all 99 repairs resolve.
+
+Tests: `tests/test_seam_autopsy_system.py::test_superseded_claim_survives_a_clip_index_shift`
+(fails without the fix); the duplicate-segment clip_index test still passes.
+
 # Planned: prune the job-API driver (phase 2 of entry 79)
 
 Sized on 2026-09-30 after the engine proofs (exec_062 full-auto, exec_064

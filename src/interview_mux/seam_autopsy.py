@@ -251,21 +251,34 @@ def _applied_repairs_resolved(
     ]
     # Two remediation runs often re-nudge the same edge on the same clip.
     # Only the last write per (segment, edge, clip_index) must match final EDL.
+    # clip_index only tells apart the airings of a segment that airs more than
+    # once. A clip inserted between runs shifts every later index, so for a
+    # segment with one speech clip the run-1 row kept its own key and was held
+    # to an end the run-2 rows replaced (exec_035 seg_017: 37 then 38).
+    speech_count: dict[str, int] = {}
+    for clip in edl.get("clips") or []:
+        if isinstance(clip, dict) and clip.get("type") == "speech":
+            csid = str(clip.get("segment_id") or "")
+            speech_count[csid] = speech_count.get(csid, 0) + 1
+
+    def _clip_key(row: dict[str, Any], sid: str) -> str:
+        if speech_count.get(sid, 0) <= 1:
+            return ""
+        return str(row.get("clip_index") if row.get("clip_index") is not None else "")
+
     latest_bound: dict[tuple[str, str, str], int] = {}
     for index, row in applied_rows:
         edge = _bound_edge_for_applied(row)
         sid = str(row.get("segment_id") or "")
-        clip_key = str(row.get("clip_index") if row.get("clip_index") is not None else "")
         if edge and sid:
-            latest_bound[(sid, edge, clip_key)] = index
+            latest_bound[(sid, edge, _clip_key(row, sid))] = index
 
     for index, row in applied_rows:
         action = str(row.get("action") or "")
         sid = str(row.get("segment_id") or "")
         key = f"{index}:{action}:{sid}"
         edge = _bound_edge_for_applied(row)
-        clip_key = str(row.get("clip_index") if row.get("clip_index") is not None else "")
-        if edge and sid and latest_bound.get((sid, edge, clip_key)) != index:
+        if edge and sid and latest_bound.get((sid, edge, _clip_key(row, sid))) != index:
             resolved.append(key)
             continue
         ok = True
