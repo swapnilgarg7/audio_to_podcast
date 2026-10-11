@@ -1429,10 +1429,14 @@ def write_air_order_integrity_report(
     if policy:
         doc["resolved_policy"] = policy
     ctx.write_json(INTEGRITY_REL, doc, stage_key=stage)
+    # A critical finding refuses ranking only under block_ranking_on_critical
+    # (off by default, ISSUES 185); otherwise it is advisory and logging it as
+    # an error made a healthy run read as failed (exec_036 seg_038 -> seg_027).
+    level = "error" if block_ranking_on_critical() else "warning"
     for v in critical:
         ctx.log(
             v.get("message") or str(v.get("code") or "air_order_integrity_violation"),
-            level="error",
+            level=level,
             stage=stage,
             detail=v,
         )

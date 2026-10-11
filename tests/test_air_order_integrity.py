@@ -280,6 +280,18 @@ def test_resolved_policy_in_report(tmp_path):
     )
     assert doc.get("resolved_policy") == policy
 
+    # exec_036: an advisory critical finding (ranking does not block on it)
+    # is a warning, not an error line that makes a healthy run read as failed.
+    jump = {
+        "code": "mid_arc_reverse_jump",
+        "severity": "critical",
+        "message": "Reverse tape jump: seg_038 -> seg_027 (source_gap_ms=-272400)",
+    }
+    write_air_order_integrity_report(
+        ctx, violations=[jump], stage="test", resolved_policy=policy
+    )
+    assert [lvl for msg, lvl, _ in ctx.logs if "Reverse tape jump" in msg] == ["warning"]
+
 
 def test_junction_source_skips_layup_invalidate(tmp_path, monkeypatch):
     """Junction remaster must not archive mix via layup invalidate."""

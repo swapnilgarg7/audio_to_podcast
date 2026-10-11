@@ -6827,6 +6827,29 @@ than once. For a segment with one speech clip in the EDL, supersession keys on
 Tests: `tests/test_seam_autopsy_system.py::test_superseded_claim_survives_a_clip_index_shift`
 (fails without the fix); the duplicate-segment clip_index test still passes.
 
+## [189] advisory reverse tape jump logged at error level (exec_036, granola, fresh on dac2a7819)
+
+**Stage / area:** `air_order_integrity.write_air_order_integrity_report`
+**Status:** FIXED
+
+**Seen:** exec_036 reached g_publish with every stage done, master.wav written
+and post_master_quality `pass`, but its log carried two error lines:
+"Reverse tape jump: seg_038 -> seg_027 (source_gap_ms=-272400)", one from
+full_master_ranking and one from artifact_sanitize.selection. Neither blocked
+anything; the run continued and shipped the same order.
+
+**Cause:** critical air-order findings block ranking only when
+`block_ranking_on_critical()` is on (default off), but the report logged each
+critical finding at error level either way. An error line that blocks nothing
+reads as a failed run in the log and fails the clean-run bar.
+
+**Fix:** critical findings log at error only when they block ranking, and at
+warning otherwise. The report JSON still lists them as critical.
+
+Tests: `tests/test_air_order_integrity.py::test_resolved_policy_in_report` now
+asserts a critical reverse jump logs at warning under the default policy (fails
+without the fix).
+
 # Planned: prune the job-API driver (phase 2 of entry 79)
 
 Sized on 2026-09-30 after the engine proofs (exec_062 full-auto, exec_064
