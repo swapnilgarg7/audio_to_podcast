@@ -2869,12 +2869,15 @@ def test_edl_adopt_must_use_layup_owner_not_edl_stage_key(
         {"ordered_segment_ids": ordered, "order_lock": {"revision": 1}},
         skip_handoff=True,
     )
+    # The one-writer admit copies the selection ids onto the plan on write, so
+    # the staleness evidence must live in the lock: a plan built for an order
+    # with one more id (revision alone is paperwork, ISSUES 190).
     ctx.write_json(
         PLAN_REL,
         {
             "ordered_segment_ids": ordered + ["seg_stale"],
             "layups": [],
-            "order_lock": {"revision": 1},
+            "order_lock": {"revision": 1, "ordered_segment_ids": ordered + ["seg_stale"]},
         },
         skip_handoff=True,
     )

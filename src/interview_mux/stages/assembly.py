@@ -539,6 +539,9 @@ def build_flow1_edl(
     missing_targets: list[str] = []
     missing_segments: list[str] = []
     omitted_unplayable: list[str] = []
+    # Before-VO line ids whose target the builder omitted as unplayable. The
+    # pickup is taken back off the timeline with its target (ISSUES 190).
+    unseated_before_vo: list[str] = []
     missing_transitions: list[str] = []
     # Seams where a cloned voice abuts the same native speaker. Recorded, never
     # suppressed: the EDL seats every line the gap report airs (ISSUES 184).
@@ -808,6 +811,11 @@ def build_flow1_edl(
 
         prev_sid = ordered[idx - 1] if idx > 0 else ""
         prev_seg = segments_by_id.get(prev_sid) if prev_sid else None
+        # The opening grammar belongs to the first *seated* clip, not to air
+        # index 0: an omitted first fragment must not take the opening with it.
+        first_seat = not any(
+            isinstance(c, dict) and c.get("type") == "speech" for c in clips
+        )
         skip_before_vo = _same_speaker_source_contiguous(prev_seg, seg)
         nxt = ordered[idx + 1] if idx + 1 < len(ordered) else ""
         next_before_vo = bool(
@@ -851,7 +859,7 @@ def build_flow1_edl(
         # Straight: orientation first among before-VO. Cold open: defer hook before-VO
         # until after hook speech + opening_music + orientation.
         cold_open_hook = False
-        if idx == 0 and gap_report:
+        if first_seat and gap_report:
             for _oln in gap_report.get("interviewer_lines") or []:
                 if (
                     isinstance(_oln, dict)
@@ -1102,13 +1110,54 @@ def build_flow1_edl(
             )
             timeline_ms += kept
 
+        # Everything seated for this segment before its speech clip (kept tape
+        # pause, chapter bridge, before-VO pickups, air pads) is provisional
+        # until the speech clip itself seats. A segment the builder then omits
+        # as unplayable takes those back with it; a pickup left behind targets
+        # a segment that is not in ordered speech, which narrative QC refuses
+        # as an orphan on every pass (exec on 2026-10-11, seg_038; ISSUES 190).
+        seat_mark = (
+            len(clips),
+            len(gap_placements),
+            timeline_ms,
+            len(missing_vo),
+            len(clone_adjacency_advisory),
+        )
+
+        def _unseat_before_vo(reason: str) -> None:
+            nonlocal timeline_ms
+            taken_back = [
+                str(c.get("line_id") or "")
+                for c in clips[seat_mark[0] :]
+                if isinstance(c, dict) and c.get("type") == "vo_pickup"
+            ]
+            del clips[seat_mark[0] :]
+            del gap_placements[seat_mark[1] :]
+            timeline_ms = seat_mark[2]
+            del missing_vo[seat_mark[3] :]
+            del clone_adjacency_advisory[seat_mark[4] :]
+            for lid in taken_back:
+                if lid and lid not in unseated_before_vo:
+                    unseated_before_vo.append(lid)
+            if taken_back and ctx is not None:
+                try:
+                    ctx.log(
+                        f"EDL: {sid} omitted as unplayable ({reason}); its before-VO "
+                        f"{taken_back} is omitted with it",
+                        level="warning",
+                        stage="edl",
+                        detail={"segment_id": sid, "line_ids": taken_back, "reason": reason},
+                    )
+                except Exception:
+                    pass
+
         _insert_kept_source_gap()
         for line in before_lines:
             _emit_vo_line(line, placement="before")
 
         # Native-open omit: still reserve the opening-music window so theme can
         # bed under the hosts' own greeting (music → body).
-        if idx == 0 and not cold_open_hook:
+        if first_seat and not cold_open_hook:
             meta = (
                 (gap_report or {}).get("opening_orientation")
                 if isinstance(gap_report, dict)
@@ -1248,6 +1297,18 @@ def build_flow1_edl(
                     hard_keep = sid in hard_keep_segment_ids(ctx)
                 except Exception:
                     hard_keep = False
+                if not hard_keep:
+                    # Same judge as the live-EDL writer and removal authority:
+                    # a keep they protect gets the min-air seat here instead of
+                    # an omit the selection then refuses (ISSUES 190).
+                    try:
+                        from interview_mux.removal_authority import removal_block_reason
+
+                        hard_keep = bool(
+                            removal_block_reason(ctx, sid, on_air=[str(o) for o in ordered])
+                        )
+                    except Exception:
+                        hard_keep = False
             if not hard_keep:
                 already_speech = any(
                     isinstance(c, dict) and c.get("type") == "speech" for c in clips
@@ -1266,6 +1327,7 @@ def build_flow1_edl(
                         break
                 if already_speech or later_long:
                     omitted_unplayable.append(sid)
+                    _unseat_before_vo("unplayable_short")
                     continue
                 hard_keep = True
             # Hard-keep microfragments must stay on the speech list so narrative
@@ -1296,6 +1358,7 @@ def build_flow1_edl(
                         room_end = min(room_end, nt0)
                 if room_end - speech_start < 400 and nxt_id:
                     omitted_unplayable.append(sid)
+                    _unseat_before_vo("unplayable_no_room")
                     continue
                 speech_end = max(speech_start, room_end)
                 speech_dur = speech_end - speech_start
@@ -1528,6 +1591,8 @@ def build_flow1_edl(
         # Recorded so EDL QC can tell a deliberate unplayable omission from a
         # mismatch when the selection commit of the drop was refused (ISSUES 151).
         "omitted_unplayable_segment_ids": sorted(set(omitted_unplayable)),
+        # Before-VO lines omitted with their unplayable target (ISSUES 190).
+        "omitted_unplayable_vo_line_ids": sorted(set(unseated_before_vo)),
         "clips": clips,
         "gap_placements": gap_placements,
         "timeline_duration_ms": timeline_ms,
@@ -1541,6 +1606,7 @@ def build_flow1_edl(
             "missing_segment_lookups": sorted(set(missing_segments)),
             "missing_transition_audio": sorted(set(missing_transitions)),
             "clone_adjacency_advisory": sorted(set(clone_adjacency_advisory)),
+            "vo_lines_unseated_unplayable_target": sorted(set(unseated_before_vo)),
             "clone_adjacency_id_mismatch_kept": sorted(
                 set(k for k in clone_adj.kept_despite_id() if k)
             ),
@@ -2057,6 +2123,14 @@ def run_edl(ctx: RunContext) -> None:
         ctx.log(
             f"EDL: gap targets not in selection order: "
             f"{warnings['gap_targets_not_in_selection']}",
+            level="warning",
+            stage="edl",
+        )
+    if warnings.get("vo_lines_unseated_unplayable_target"):
+        ctx.log(
+            "EDL: before-VO omitted with its unplayable target: "
+            f"{warnings['vo_lines_unseated_unplayable_target']} "
+            f"(omitted segments {edl.get('omitted_unplayable_segment_ids')})",
             level="warning",
             stage="edl",
         )

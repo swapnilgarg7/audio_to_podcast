@@ -137,6 +137,55 @@ def order_locks_match(a: dict[str, Any] | None, b: dict[str, Any] | None) -> boo
     return order_hashes_match(a, b)
 
 
+def _lock_content_hash(lock: dict[str, Any] | None, doc: dict[str, Any] | None) -> str:
+    """Content hash a lock stands for, recomputed from its id list when present."""
+    if isinstance(lock, dict):
+        ids = [str(s) for s in (lock.get("ordered_segment_ids") or []) if s]
+        if ids:
+            return ordered_segment_ids_hash(ids)
+        stored = str(lock.get("order_content_hash") or "")
+        if stored:
+            return stored
+    if isinstance(doc, dict):
+        ids = [str(s) for s in (doc.get("ordered_segment_ids") or []) if s]
+        if ids:
+            return ordered_segment_ids_hash(ids)
+    return ""
+
+
+def order_locks_same_content(a: dict[str, Any] | None, b: dict[str, Any] | None) -> bool:
+    """True when two locks stand for the same air order, whatever their revision.
+
+    A derivative (layup plan, omit ledger) built for order H is valid for order
+    H. The selection revision can move away and come back (sanitize restamps
+    it on every pass) without the derivative ever being rewritten; under a
+    hard freeze that rewrite is refused anyway. Revision is paperwork; the
+    content hash and the id list are the freshness evidence (ISSUES 190).
+    """
+    if not isinstance(a, dict) or not isinstance(b, dict):
+        return False
+    la, lb = get_order_lock(a), get_order_lock(b)
+    if not la or not lb:
+        return order_hashes_match(a, b)
+    ha = _lock_content_hash(la, a)
+    hb = _lock_content_hash(lb, b)
+    if ha and hb:
+        return ha == hb
+    return order_hashes_match(a, b)
+
+
+def order_lock_revision_only_drift(
+    a: dict[str, Any] | None, b: dict[str, Any] | None
+) -> bool:
+    """True when the locks agree on content but carry different revisions."""
+    if not order_locks_same_content(a, b):
+        return False
+    la, lb = get_order_lock(a), get_order_lock(b)
+    if not la or not lb:
+        return False
+    return int(la.get("revision") or 0) != int(lb.get("revision") or 0)
+
+
 def order_hashes_match(
     selection: dict[str, Any] | None,
     edl: dict[str, Any] | None,

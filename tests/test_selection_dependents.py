@@ -19,7 +19,7 @@ from interview_mux.selection_dependents import (
     reanchor_sound_design_cues,
     reconcile_selection_dependents,
 )
-from run_fixtures import isolated_run_ctx
+from run_fixtures import isolated_run_ctx, write_fixture_json
 
 
 @pytest.fixture
@@ -43,7 +43,12 @@ def _seed(ctx, *, selection_ids: list[str], plan_ids: list[str], sel_rev: int, p
     # The selection write may restamp its lock; a "fresh" plan copies what landed.
     sel_lock = dict(ctx.read_json("master/selection.json").get("order_lock") or {})
     plan_lock = sel_lock if plan_rev == sel_rev else {**sel_lock, "revision": plan_rev}
-    ctx.write_json(
+    # Planted raw: the one-writer admit on ``write_json`` copies the selection
+    # ids onto the plan and drops off-air rows, which would erase the very
+    # staleness these tests fit. A plan the compose owner wrote before the
+    # selection moved still lists the retired id (ISSUES 190).
+    write_fixture_json(
+        ctx,
         PLAN_REL,
         {
             "ordered_segment_ids": plan_ids,
@@ -51,7 +56,6 @@ def _seed(ctx, *, selection_ids: list[str], plan_ids: list[str], sel_rev: int, p
             "order_lock": plan_lock,
             "_meta": {"producer_stage": "nugget_layup_compose"},
         },
-        skip_handoff=True,
     )
     ctx.write_json("understanding/gap_report.json", {"interviewer_lines": []}, skip_handoff=True)
 
@@ -67,10 +71,16 @@ def test_a_retired_id_and_a_bumped_revision_are_fitted_under_hard_freeze(ctx, mo
     _seed(ctx, selection_ids=["seg_a", "seg_b"], plan_ids=["seg_a", "seg_019", "seg_b"], sel_rev=3, plan_rev=2)
     previous = {"ordered_segment_ids": ["seg_a", "seg_019", "seg_b"], "order_lock": {"revision": 2}}
     current = ctx.read_json("master/selection.json")
+    from interview_mux.nugget_layup import layup_rows_off_order
+
     assert layup_freshness_errors(ctx)
+    assert layup_rows_off_order(ctx) == ["seg_019"]
     notes = reconcile_selection_dependents(ctx, producer="edl_overlap_repair", previous=previous, current=current)
     assert "layup_plan_adopted" in notes
     assert layup_freshness_errors(ctx) == []
+    # seg_019 has no tape here, so adopt cannot rebind its row; the sanitizer
+    # drops it. Only rebindable rows re-trigger the reconcile.
+    assert layup_rows_off_order(ctx, rebindable_only=True) == []
     plan = ctx.read_json(PLAN_REL)
     assert plan["ordered_segment_ids"] == ["seg_a", "seg_b"]
     sel = ctx.read_json("master/selection.json")
@@ -78,11 +88,20 @@ def test_a_retired_id_and_a_bumped_revision_are_fitted_under_hard_freeze(ctx, mo
 
 
 def test_a_lock_only_drift_is_restamped_without_an_order_change(ctx) -> None:
+    from interview_mux.nugget_layup import layup_plan_lock_revision_drift
+
     _seed(ctx, selection_ids=["seg_a", "seg_b"], plan_ids=["seg_a", "seg_b"], sel_rev=5, plan_rev=4)
     current = ctx.read_json("master/selection.json")
-    assert layup_freshness_errors(ctx)
-    reconcile_selection_dependents(ctx, producer="full_master_ranking", previous=current, current=current)
+    # A revision-only drift is not staleness (ISSUES 190): the plan is fresh
+    # before the reconcile, and the reconcile copies the lock forward.
     assert layup_freshness_errors(ctx) == []
+    assert layup_plan_lock_revision_drift(ctx) is True
+    notes = reconcile_selection_dependents(ctx, producer="full_master_ranking", previous=current, current=current)
+    assert "layup_plan_lock_restamped" in notes
+    assert layup_plan_lock_revision_drift(ctx) is False
+    assert layup_freshness_errors(ctx) == []
+    plan = ctx.read_json(PLAN_REL)
+    assert plan["order_lock"]["revision"] == current["order_lock"]["revision"]
 
 
 def test_a_fresh_plan_is_left_alone(ctx) -> None:

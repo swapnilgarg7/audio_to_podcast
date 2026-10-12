@@ -520,7 +520,7 @@ def air_contract_errors(
 
     errors: list[str] = []
     try:
-        from interview_mux.order_hash import get_order_lock, order_locks_match
+        from interview_mux.order_hash import get_order_lock, order_locks_same_content
 
         selection = (
             ctx.read_json("master/selection.json")
@@ -529,7 +529,9 @@ def air_contract_errors(
         )
         selection_lock = get_order_lock(selection if isinstance(selection, dict) else None)
         ledger_lock = get_order_lock(ledger)
-        if selection_lock and ledger_lock and not order_locks_match(selection, ledger):
+        # Same air order under a different revision is paperwork, not a stale
+        # ledger (ISSUES 190, the layup plan's twin).
+        if selection_lock and ledger_lock and not order_locks_same_content(selection, ledger):
             errors.append("omit_ledger_order_lock_stale")
     except Exception:
         errors.append("omit_ledger_order_lock_unreadable")

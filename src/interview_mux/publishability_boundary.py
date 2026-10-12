@@ -367,6 +367,16 @@ def _check_unseated_required_vo(
         line_is_omitted = None  # type: ignore[assignment,misc]
         ledger = {}
     compensated: set[str] = set()
+    # A before-line whose target the EDL omitted as unplayable has no seat to
+    # take: the segment is not in ordered speech, so the line is omitted with
+    # it (ISSUES 190). The EDL records both lists; neither needs ledger
+    # paperwork the edl stage may not write.
+    omitted_targets = {
+        str(s) for s in ((edl or {}).get("omitted_unplayable_segment_ids") or []) if s
+    }
+    omitted_lines = {
+        str(s) for s in ((edl or {}).get("omitted_unplayable_vo_line_ids") or []) if s
+    }
     if active_entries is not None and isinstance(ledger, dict):
         try:
             # Ledger rows key the line as ``subject_id`` (omit_ledger.mint_entry);
@@ -391,6 +401,11 @@ def _check_unseated_required_vo(
             continue
         lid = str(line.get("line_id") or "")
         if not lid or lid in edl_line_ids or lid in compensated:
+            continue
+        if lid in omitted_lines or (
+            omitted_targets
+            and str(line.get("targets_segment_id") or "") in omitted_targets
+        ):
             continue
         # Pillar B: frozen omitted lines are intentional, not collateral strip
         try:

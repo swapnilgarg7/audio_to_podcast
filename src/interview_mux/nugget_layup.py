@@ -96,7 +96,14 @@ def nugget_layup_cfg(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
         "min_layup_words": int(block.get("min_layup_words", 18)),
         "max_layup_words": int(block.get("max_layup_words", 90)),
         "prefer_excluded_nuggets": bool(block.get("prefer_excluded_nuggets", True)),
-        "segment_text_max_chars": int(block.get("segment_text_max_chars", 1500)),
+        "segment_text_max_chars": int(block.get("segment_text_max_chars", 4000)),
+        # Full-tape mining (ISSUES 191): words between segments and words a
+        # cut trims off a kept segment stay in the running for synthetic VO.
+        "full_tape_spans": bool(block.get("full_tape_spans", True)),
+        "between_span_split_gap_ms": int(block.get("between_span_split_gap_ms", 1500)),
+        "between_span_max_chars": int(block.get("between_span_max_chars", 4000)),
+        "cut_words_before_max_chars": int(block.get("cut_words_before_max_chars", 600)),
+        "tape_window_boost": float(block.get("tape_window_boost", 0.6)),
         "prior_close_excerpt_chars": int(block.get("prior_close_excerpt_chars", 480)),
         "max_open_nuggets_per_target": int(block.get("max_open_nuggets_per_target", 8)),
         # Ranked open-nugget rows are pointers into top-level nugget_corpus (claims live once).
@@ -220,14 +227,19 @@ def layup_freshness_errors(
             "nugget_layup_plan ordered_segment_ids do not match master/selection.json "
             f"(missing={missing[:8]}, stale={extra[:8]})"
         )
-    # Order-lock revision mismatch even when lists somehow match.
+    # Order-lock content mismatch even when lists somehow match. A revision
+    # that differs while the content hash and the id list agree is paperwork,
+    # not staleness: the selection order moved and came back (sanitize bumps
+    # the revision on every pass) and the plan was built for exactly this
+    # order. Treating it as stale re-dispatched compose until the invoke cap
+    # while the hard freeze refused the restamp (ISSUES 190).
     try:
-        from interview_mux.order_hash import get_order_lock, order_locks_match
+        from interview_mux.order_hash import get_order_lock, order_locks_same_content
 
         if ctx.artifact_exists("master/selection.json"):
             sel_doc = ctx.read_json("master/selection.json")
             if isinstance(sel_doc, dict) and get_order_lock(sel_doc) and get_order_lock(plan):
-                if not order_locks_match(sel_doc, plan):
+                if not order_locks_same_content(sel_doc, plan):
                     errors.append(
                         "nugget_layup_plan order_lock diverges from selection "
                         f"(sel_rev={(get_order_lock(sel_doc) or {}).get('revision')}, "
@@ -236,6 +248,90 @@ def layup_freshness_errors(
     except Exception:
         pass
     return errors
+
+
+def layup_rows_off_order(
+    ctx: RunContext,
+    plan: dict[str, Any] | None = None,
+    *,
+    rebindable_only: bool = False,
+) -> list[str]:
+    """Lay-up targets that are no longer on the committed air order.
+
+    Not a freshness error (the one-writer admit already copies the selection
+    ids onto the plan on write, so the id list can agree while a row still
+    aims at a retired id); it is the reconcile trigger that rebinds the row.
+    With ``rebindable_only`` only targets whose tape overlaps a live native
+    count: those are the rows ``adopt_layup_plan_to_selection`` can move. A
+    retired id with no live tape stays for the sanitizer to drop.
+    """
+    if plan is None:
+        plan = ctx.read_json(PLAN_REL) if ctx.artifact_exists(PLAN_REL) else {}
+    if not isinstance(plan, dict):
+        return []
+    ordered = _ordered_ids(ctx)
+    live = set(ordered)
+    if not live:
+        return []
+    windows = _segment_windows(ctx) if rebindable_only else {}
+    out: list[str] = []
+    for row in plan.get("layups") or []:
+        if not isinstance(row, dict):
+            continue
+        tid = str(row.get("target_segment_id") or "").strip()
+        if not tid or tid in live or tid in out:
+            continue
+        if rebindable_only:
+            tw = windows.get(tid)
+            if not tw or not any(
+                windows.get(sid) and _overlap_ms(tw[0], tw[1], windows[sid][0], windows[sid][1]) > 0
+                for sid in ordered
+            ):
+                continue
+        out.append(tid)
+    return out
+
+
+def layup_plan_lock_revision_drift(ctx: RunContext, plan: dict[str, Any] | None = None) -> bool:
+    """True when the plan lock matches the selection order but not its revision."""
+    if plan is None:
+        plan = ctx.read_json(PLAN_REL) if ctx.artifact_exists(PLAN_REL) else {}
+    if not isinstance(plan, dict) or not ctx.artifact_exists("master/selection.json"):
+        return False
+    try:
+        from interview_mux.order_hash import order_lock_revision_only_drift
+
+        sel_doc = ctx.read_json("master/selection.json")
+        return bool(isinstance(sel_doc, dict) and order_lock_revision_only_drift(sel_doc, plan))
+    except Exception:
+        return False
+
+
+def restamp_layup_plan_order_lock(ctx: RunContext, *, stage: str = "nugget_layup_compose") -> bool:
+    """Copy the selection lock onto a plan that differs only by revision.
+
+    A courtesy write: refused under ownership or freeze it is skipped quietly
+    (the plan is fresh either way, see ``layup_freshness_errors``). Returns
+    True when the restamp landed.
+    """
+    if not ctx.artifact_exists(PLAN_REL):
+        return False
+    try:
+        plan = ctx.read_json(PLAN_REL)
+    except Exception:
+        return False
+    if not isinstance(plan, dict) or not layup_plan_lock_revision_drift(ctx, plan):
+        return False
+    stamped = attach_selection_order_lock(ctx, plan)
+    try:
+        ctx.write_json(PLAN_REL, stamped, skip_handoff=True, stage_key=stage, optional=True)
+    except Exception:
+        return False
+    try:
+        again = ctx.read_json(PLAN_REL)
+    except Exception:
+        return False
+    return not layup_plan_lock_revision_drift(ctx, again if isinstance(again, dict) else None)
 
 
 def assert_layup_fresh_vs_selection(
@@ -357,6 +453,7 @@ def build_corpus_mine_input(ctx: RunContext) -> dict[str, Any]:
         sid = str(row.get("segment_id") or "")
         if not sid:
             continue
+        full_text = _norm(str(row.get("text") or ""))
         seg: dict[str, Any] = {
             "segment_id": sid,
             "speaker_id": row.get("speaker_id"),
@@ -365,8 +462,11 @@ def build_corpus_mine_input(ctx: RunContext) -> dict[str, Any]:
             "end_ms": row.get("end_ms"),
             "type": row.get("type"),
             "in_selection": sid in oset,
-            "text": _clip_text(str(row.get("text") or ""), max_chars),
+            "text": _clip_text(full_text, max_chars),
         }
+        # No word on tape is lost to the packet cap: the overflow rides along.
+        if len(full_text) > max_chars:
+            seg["text_continued"] = full_text[max(0, max_chars - 1) :].lstrip()
         if sid in excluded_meta:
             seg["why_dropped"] = excluded_meta[sid]["why_dropped"]
             seg["recovery_value"] = excluded_meta[sid]["recovery_value"]
@@ -379,6 +479,30 @@ def build_corpus_mine_input(ctx: RunContext) -> dict[str, Any]:
         except Exception:
             pass
         segments.append(seg)
+    between_spans: list[dict[str, Any]] = []
+    if cfg.get("full_tape_spans", True):
+        words = _load_transcript_words(ctx)
+        if words:
+            manifest_rows = _manifest_segments(ctx)
+            windows = segment_air_windows(ctx)
+            for seg in segments:
+                sid = str(seg.get("segment_id") or "")
+                if not seg.get("in_selection"):
+                    continue
+                slab = _row_slab(next((r for r in manifest_rows if str(r.get("segment_id") or "") == sid), None))
+                window = windows.get(sid)
+                if slab is None or window is None:
+                    continue
+                seg["air_start_ms"], seg["air_end_ms"] = window
+                off_air = off_air_text_for_segment(words, slab, window)
+                if off_air:
+                    seg["off_air_text"] = _clip_text(off_air, int(cfg["between_span_max_chars"]))
+            between_spans = build_between_segment_spans(
+                words,
+                manifest_rows,
+                split_gap_ms=int(cfg["between_span_split_gap_ms"]),
+                max_chars=int(cfg["between_span_max_chars"]),
+            )
     talking_points = (
         ctx.read_json("understanding/talking_points.json")
         if ctx.artifact_exists("understanding/talking_points.json")
@@ -414,6 +538,17 @@ def build_corpus_mine_input(ctx: RunContext) -> dict[str, Any]:
         "partial_evidence_doctrine": (
             "Prefer high-confidence spans for evidence_quote. When evidence sits in a "
             "low-conf cluster, set evidence_partial:true and quote only comprehensible tokens."
+        ),
+        "between_segment_spans": between_spans,
+        "full_tape_doctrine": (
+            "Every spoken line on the tape is in play. Selection only decides which "
+            "recordings air natively; a cut only decides where one native clip ends "
+            "and the next begins. Words in between_segment_spans (never inside any "
+            "segment) and words in a kept segment's off_air_text (outside its "
+            "air_start_ms..air_end_ms window) are NOT heard by the listener: mine them "
+            "as in_selection:false nuggets with source_start_ms/source_end_ms and never "
+            "mark them already_aired_in_selection. A between-segment nugget has "
+            "source_segment_ids: []."
         ),
     }
     try:
@@ -457,11 +592,16 @@ def rank_open_nuggets_for_target(
     limit: int = 8,
     prefer_excluded: bool = True,
     slim: bool = False,
+    tape_window: tuple[int, int] | None = None,
+    tape_window_boost: float = 0.6,
 ) -> list[dict[str, Any]]:
     """Open corpus nuggets ranked for one upcoming native (excluded tape first).
 
     When ``slim`` is true, ranked rows are pointers only (``nugget_id`` + scores);
     look up ``text_claim`` / ``evidence_quote`` in the top-level ``nugget_corpus``.
+    ``tape_window`` is the source span the cut dropped right before this native
+    (prior native's air end to this native's air start): a nugget spoken there
+    is the words the listener would have heard at this seam, so it ranks up.
     """
     skip = {str(x) for x in (exclude_ids or set())}
     target_tokens = _tokens(target_text)
@@ -479,12 +619,20 @@ def rank_open_nuggets_for_target(
         score = relevance * 2.0 + _salience_weight(nug)
         if prefer_excluded and not nug.get("in_selection"):
             score += 0.5
+        at_seam = False
+        if tape_window is not None:
+            span = _nugget_span(nug)
+            if span is not None and _overlap_ms(span[0], span[1], tape_window[0], tape_window[1]) > 0:
+                at_seam = True
+                score += float(tape_window_boost)
         row: dict[str, Any] = {
             "nugget_id": nid,
             "salience": nug.get("salience"),
             "in_selection": bool(nug.get("in_selection")),
             "relevance_to_target": round(relevance, 3),
         }
+        if at_seam:
+            row["cut_at_this_seam"] = True
         if not slim:
             row["text_claim"] = _clip_text(str(nug.get("text_claim") or ""), 240)
             row["evidence_quote"] = _clip_text(str(nug.get("evidence_quote") or ""), 180)
@@ -659,6 +807,279 @@ def _load_transcript_words(ctx: RunContext) -> list[dict[str, Any]]:
     return words
 
 
+def _word_bounds(w: dict[str, Any]) -> tuple[int, int] | None:
+    try:
+        start = int(w.get("start_ms") or 0)
+        end = int(w.get("end_ms") or start)
+    except (TypeError, ValueError):
+        return None
+    return start, max(start, end)
+
+
+def _word_text(w: dict[str, Any]) -> str:
+    return str(w.get("text") or w.get("word") or "").strip()
+
+
+def transcript_words_text(words: list[dict[str, Any]], start_ms: int, end_ms: int) -> str:
+    """Transcript words whose start lies in ``[start_ms, end_ms)``, joined."""
+    out: list[str] = []
+    for w in words:
+        b = _word_bounds(w)
+        if b is None:
+            continue
+        if int(start_ms) <= b[0] < int(end_ms):
+            t = _word_text(w)
+            if t:
+                out.append(t)
+    return _norm(" ".join(out))
+
+
+def _row_slab(row: dict[str, Any] | None) -> tuple[int, int] | None:
+    if not isinstance(row, dict):
+        return None
+    try:
+        start = int(row.get("start_ms") or 0)
+        end = int(row.get("end_ms") or 0)
+    except (TypeError, ValueError):
+        return None
+    return (start, end) if end > start else None
+
+
+def _nugget_span(nug: dict[str, Any] | None) -> tuple[int, int] | None:
+    if not isinstance(nug, dict):
+        return None
+    try:
+        s0 = nug.get("source_start_ms")
+        e0 = nug.get("source_end_ms")
+        if s0 is None or e0 is None:
+            return None
+        start, end = int(s0), int(e0)
+    except (TypeError, ValueError):
+        return None
+    return (start, end) if end > start else None
+
+
+def segment_air_windows(ctx: RunContext) -> dict[str, tuple[int, int]]:
+    """Best estimate of the tape each manifest segment airs: ideal cut ∩ slab.
+
+    The EDL settles exact bounds later; at mine/compose time the ideal-cut
+    window is the aired part and the rest of the slab is off-air tape. Without
+    a cut the whole slab airs.
+    """
+    out: dict[str, tuple[int, int]] = {}
+    cuts: Any = None
+    try:
+        from interview_mux.ideal_cuts import load_air_bound_inputs, overlapping_ideal_window
+
+        cuts, _words = load_air_bound_inputs(ctx)
+    except Exception:
+        cuts = None
+        overlapping_ideal_window = None  # type: ignore[assignment]
+    for row in _manifest_segments(ctx):
+        sid = str(row.get("segment_id") or "").strip()
+        slab = _row_slab(row)
+        if not sid or slab is None:
+            continue
+        window = slab
+        if cuts is not None and overlapping_ideal_window is not None:
+            try:
+                ideal = overlapping_ideal_window(
+                    source_start_ms=slab[0],
+                    source_end_ms=slab[1],
+                    cuts_doc=cuts,
+                    segment_id=sid,
+                )
+            except Exception:
+                ideal = None
+            if ideal is not None:
+                clipped = (max(slab[0], int(ideal[0])), min(slab[1], int(ideal[1])))
+                if clipped[1] - clipped[0] >= 1000:
+                    window = clipped
+        out[sid] = window
+    return out
+
+
+def off_air_text_for_segment(
+    words: list[dict[str, Any]],
+    slab: tuple[int, int],
+    window: tuple[int, int],
+) -> str:
+    """Words of a kept segment that its air window leaves on the tape."""
+    if window[0] <= slab[0] and window[1] >= slab[1]:
+        return ""
+    head = transcript_words_text(words, slab[0], max(slab[0], window[0]))
+    tail = transcript_words_text(words, min(slab[1], window[1]), slab[1])
+    parts = [p for p in (head, tail) if p]
+    return " … ".join(parts)
+
+
+def build_between_segment_spans(
+    words: list[dict[str, Any]],
+    segments: list[dict[str, Any]],
+    *,
+    split_gap_ms: int = 1500,
+    max_chars: int = 4000,
+) -> list[dict[str, Any]]:
+    """Runs of transcript words that sit inside no manifest segment at all.
+
+    Each run is a candidate nugget source with tape neighbours named, so the
+    miner can place a fact between the segments it fell between (ISSUES 191).
+    Runs split on a pause longer than ``split_gap_ms`` or a speaker change.
+    """
+    slabs: list[tuple[int, int, str]] = []
+    for row in segments:
+        slab = _row_slab(row)
+        sid = str((row or {}).get("segment_id") or "")
+        if slab is not None and sid:
+            slabs.append((slab[0], slab[1], sid))
+    slabs.sort()
+
+    def _covered(mid: int) -> bool:
+        return any(s0 <= mid < s1 for s0, s1, _ in slabs)
+
+    runs: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    last_end: int | None = None
+    last_speaker: str | None = None
+    for w in words:
+        b = _word_bounds(w)
+        if b is None or not _word_text(w):
+            continue
+        mid = (b[0] + b[1]) // 2
+        if _covered(mid):
+            if current:
+                runs.append(current)
+                current = []
+            last_end = None
+            last_speaker = None
+            continue
+        speaker = str(w.get("speaker_id") or "") or None
+        if current and (
+            (last_end is not None and b[0] - last_end > int(split_gap_ms))
+            or (speaker and last_speaker and speaker != last_speaker)
+        ):
+            runs.append(current)
+            current = []
+        current.append(w)
+        last_end = b[1]
+        last_speaker = speaker or last_speaker
+    if current:
+        runs.append(current)
+
+    out: list[dict[str, Any]] = []
+    for run in runs:
+        start = _word_bounds(run[0])[0]  # type: ignore[index]
+        end = _word_bounds(run[-1])[1]  # type: ignore[index]
+        text = _norm(" ".join(_word_text(w) for w in run))
+        if not _WORD.search(text):
+            continue
+        speakers: dict[str, int] = {}
+        for w in run:
+            spk = str(w.get("speaker_id") or "")
+            if spk:
+                speakers[spk] = speakers.get(spk, 0) + 1
+        prev_sid = ""
+        next_sid = ""
+        for s0, s1, sid in slabs:
+            if s1 <= start:
+                prev_sid = sid
+            elif s0 >= end and not next_sid:
+                next_sid = sid
+        span: dict[str, Any] = {
+            "span_id": f"gap_{start}_{end}",
+            "start_ms": start,
+            "end_ms": end,
+            "speaker_id": max(speakers, key=speakers.get) if speakers else None,
+            "word_count": len(run),
+            "prev_segment_id": prev_sid or None,
+            "next_segment_id": next_sid or None,
+            "in_selection": False,
+            "text": _clip_text(text, max_chars),
+        }
+        if len(text) > max_chars:
+            span["text_continued"] = text[max(0, max_chars - 1) :].lstrip()
+        out.append(span)
+    return out
+
+
+def normalize_corpus_tape_status(ctx: RunContext, corpus: dict[str, Any] | None) -> dict[str, Any]:
+    """Deterministic air status for mined nuggets from their tape span.
+
+    The miner guesses ``in_selection`` / ``already_aired_in_selection`` from
+    segment ids; the tape decides. A nugget whose span lies outside every
+    selected segment's air window (between segments, or in the part a cut
+    trims off) is not heard on air, so it stays open for a voiceover insert.
+    Empty ``source_segment_ids`` are filled from the manifest slabs the span
+    overlaps so id-keyed consumers keep working (ISSUES 191).
+    """
+    out = dict(corpus) if isinstance(corpus, dict) else {"nuggets": []}
+    nuggets = [n for n in (out.get("nuggets") or []) if isinstance(n, dict)]
+    if not nuggets:
+        return out
+    ordered = set(_ordered_ids(ctx))
+    windows = segment_air_windows(ctx)
+    slabs: dict[str, tuple[int, int]] = {}
+    for row in _manifest_segments(ctx):
+        sid = str(row.get("segment_id") or "").strip()
+        slab = _row_slab(row)
+        if sid and slab is not None:
+            slabs[sid] = slab
+    fixed: list[dict[str, Any]] = []
+    recovered = 0
+    for nug in nuggets:
+        row = dict(nug)
+        span = _nugget_span(row)
+        sources = [str(x) for x in (row.get("source_segment_ids") or []) if x]
+        if span is None:
+            if sources and slabs:
+                known = [s for s in sources if s in slabs]
+                if known:
+                    row["in_selection"] = any(s in ordered for s in known)
+            fixed.append(row)
+            continue
+        touching = sorted(
+            (
+                (_overlap_ms(span[0], span[1], slab[0], slab[1]), sid)
+                for sid, slab in slabs.items()
+            ),
+            key=lambda t: (-t[0], t[1]),
+        )
+        touching = [sid for ov, sid in touching if ov > 0]
+        if not sources and touching:
+            row["source_segment_ids"] = touching[:4]
+            sources = touching[:4]
+        heard_ms = 0
+        for sid in sources or touching:
+            if sid not in ordered:
+                continue
+            window = windows.get(sid) or slabs.get(sid)
+            if window is None:
+                continue
+            heard_ms = max(heard_ms, _overlap_ms(span[0], span[1], window[0], window[1]))
+        span_len = max(1, span[1] - span[0])
+        heard = heard_ms >= min(1000, span_len // 2) and heard_ms > 0
+        if not touching:
+            row["source_kind"] = "between_segments"
+        elif heard:
+            row["source_kind"] = "segment"
+        else:
+            row["source_kind"] = "off_air_span" if any(s in ordered for s in touching) else "segment"
+        if heard:
+            row["in_selection"] = True
+        else:
+            if row.get("in_selection") or row.get("already_aired_in_selection"):
+                recovered += 1
+            row["in_selection"] = False
+            row["already_aired_in_selection"] = False
+        fixed.append(row)
+    out["nuggets"] = fixed
+    if recovered:
+        warnings = list(out.get("warnings") or [])
+        warnings.append(f"tape_status_reopened_off_air_nuggets:{recovered}")
+        out["warnings"] = warnings
+    return out
+
+
 def _word_conf_value(w: dict[str, Any]) -> float | None:
     value = w.get("confidence")
     if value is None:
@@ -826,14 +1247,29 @@ def _seam_reason(prev_row: dict[str, Any] | None, row: dict[str, Any]) -> str:
     return "source_contiguous"
 
 
-def _nuggets_spoken_by(nuggets: list[dict[str, Any]], segment_id: str) -> list[dict[str, Any]]:
+def _nuggets_spoken_by(
+    nuggets: list[dict[str, Any]],
+    segment_id: str,
+    *,
+    air_window: tuple[int, int] | None = None,
+) -> list[dict[str, Any]]:
+    """Nuggets this native speaks on air.
+
+    A nugget sourced from the segment but spoken in the part the cut trims off
+    (outside ``air_window``) is not heard, so it is not discharged (ISSUES 191).
+    """
     out: list[dict[str, Any]] = []
     for nug in nuggets:
         if not isinstance(nug, dict):
             continue
         sources = {str(x) for x in (nug.get("source_segment_ids") or []) if x}
-        if segment_id and segment_id in sources:
-            out.append(nug)
+        if not segment_id or segment_id not in sources:
+            continue
+        if air_window is not None:
+            span = _nugget_span(nug)
+            if span is not None and _overlap_ms(span[0], span[1], air_window[0], air_window[1]) <= 0:
+                continue
+        out.append(nug)
     return out
 
 
@@ -868,11 +1304,26 @@ def build_layup_compose_input(
     corpus = corpus if isinstance(corpus, dict) else {"nuggets": []}
     nuggets = [n for n in (corpus.get("nuggets") or []) if isinstance(n, dict)]
     try:
-        from interview_mux.media_ip_cta import nugget_from_never_touch
+        from interview_mux.media_ip_cta import (
+            never_touch_segment_ids,
+            never_touch_source_intervals,
+            nugget_from_never_touch,
+        )
 
-        nuggets = [n for n in nuggets if not nugget_from_never_touch(ctx, n)]
+        nt_ids = never_touch_segment_ids(ctx)
+        try:
+            nt_intervals = never_touch_source_intervals(ctx)
+        except Exception:
+            nt_intervals = []
+        nuggets = [
+            n
+            for n in nuggets
+            if not nugget_from_never_touch(ctx, n, banned_ids=nt_ids, intervals=nt_intervals)
+        ]
     except Exception:
         pass
+    air_windows = segment_air_windows(ctx) if cfg.get("full_tape_spans", True) else {}
+    tape_words = _load_transcript_words(ctx) if cfg.get("full_tape_spans", True) else []
     prior_plan = ctx.read_json(PLAN_REL) if ctx.artifact_exists(PLAN_REL) else {}
     prior_by_target = {
         str(r.get("target_segment_id") or ""): r
@@ -925,6 +1376,14 @@ def build_layup_compose_input(
                     }
                 )
         include_row = want is None or sid in want
+        # The tape the cut dropped right before this native: from the prior
+        # native's air end to this native's air start, tape-forward only.
+        tape_window: tuple[int, int] | None = None
+        if index and air_windows:
+            prev_w = air_windows.get(ordered[index - 1])
+            this_w = air_windows.get(sid)
+            if prev_w and this_w and prev_w[1] < this_w[0]:
+                tape_window = (prev_w[1], this_w[0])
         if include_row:
             comp = _clip_text(spine, max_chars)
             text = _clip_text(verbatim, max_chars if not degraded else max(max_chars, 2200))
@@ -968,6 +1427,8 @@ def build_layup_compose_input(
                     limit=int(cfg["max_open_nuggets_per_target"]),
                     prefer_excluded=bool(cfg["prefer_excluded_nuggets"]),
                     slim=slim_open,
+                    tape_window=tape_window,
+                    tape_window_boost=float(cfg.get("tape_window_boost", 0.6)),
                 ),
                 "work_around_doctrine": (
                     "Orient and unlock from comprehensible spine + corpus only; "
@@ -986,10 +1447,17 @@ def build_layup_compose_input(
             # Avoid triplicating the same string when the clip is clear.
             if degraded or text != comp:
                 native_row["high_conf_text"] = comp
+            if tape_window is not None and tape_words:
+                cut_words = transcript_words_text(tape_words, tape_window[0], tape_window[1])
+                if cut_words:
+                    native_row["cut_words_before"] = _clip_tail(
+                        cut_words, int(cfg.get("cut_words_before_max_chars", 600))
+                    )
+                    native_row["cut_tape_window_ms"] = [tape_window[0], tape_window[1]]
             natives.append(native_row)
         # Facts this native speaks itself, plus anything a prior compose pass
         # already assigned here, are discharged for every later target.
-        for nug in _nuggets_spoken_by(nuggets, sid):
+        for nug in _nuggets_spoken_by(nuggets, sid, air_window=air_windows.get(sid)):
             nid = str(nug.get("nugget_id") or "")
             if nid and nid not in aired_ids:
                 aired_ids.append(nid)

@@ -77,7 +77,42 @@ def maybe_repair_after_narrative_audit(ctx: RunContext, artifacts: dict[str, Any
                 from interview_mux.artifact_ownership import freeze_write_allowed
                 from interview_mux.artifact_repairs import relabel_chapters_contiguous
 
-                if freeze_write_allowed(ctx, "edl_narrative_audit", "narrative_metadata_align"):
+                # The freeze policy row is necessary, not sufficient: the
+                # ownership table can still refuse the persist (a hard freeze
+                # owned by selection_framing_apply, exec on 2026-10-11, ISSUES
+                # 190). Ask it first so a refusal costs a note, not an
+                # error-level denial from inside the audit's finish path.
+                from interview_mux.artifact_ownership import write_permitted
+
+                may_persist = freeze_write_allowed(
+                    ctx, "edl_narrative_audit", "narrative_metadata_align"
+                )
+                if may_persist:
+                    try:
+                        may_persist, deny_reason = write_permitted(
+                            ctx,
+                            "master/selection.json",
+                            "edl_narrative_audit",
+                            role="producer",
+                            verb="persist",
+                            mutation_class="narrative_metadata_align",
+                        )
+                    except Exception:
+                        may_persist, deny_reason = False, "write_permitted_failed"
+                    if not may_persist:
+                        notes.append(
+                            {
+                                "action": "skip_relabel_chapters_not_permitted",
+                                "reason": str(deny_reason)[:120],
+                            }
+                        )
+                        ctx.log(
+                            "edl_narrative_audit repair: chapter relabel not persisted "
+                            f"({deny_reason}); the selection owner keeps the labels",
+                            level="info",
+                            stage="edl_narrative_audit",
+                        )
+                if may_persist:
                     sel_now = ctx.read_json("master/selection.json")
                     relabeled, changed = relabel_chapters_contiguous(
                         sel_now if isinstance(sel_now, dict) else {}

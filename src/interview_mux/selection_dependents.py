@@ -116,7 +116,10 @@ def _reconcile_layup_plan(ctx: RunContext, notes: list[str]) -> None:
         PLAN_REL,
         adopt_layup_plan_to_selection,
         layup_freshness_errors,
+        layup_plan_lock_revision_drift,
+        layup_rows_off_order,
         nugget_layup_enabled,
+        restamp_layup_plan_order_lock,
     )
 
     if not nugget_layup_enabled() or not ctx.artifact_exists(PLAN_REL):
@@ -131,7 +134,16 @@ def _reconcile_layup_plan(ctx: RunContext, notes: list[str]) -> None:
     if meta.get("stale"):
         # The unfrozen cascade asked for a recompose; the plan is not ours to fit.
         return
-    if not layup_freshness_errors(ctx, plan):
+    if not layup_freshness_errors(ctx, plan) and not layup_rows_off_order(
+        ctx, plan, rebindable_only=True
+    ):
+        # Same order, newer selection revision: copy the lock forward when the
+        # owner may write; a refused courtesy write changes nothing (ISSUES 190).
+        if layup_plan_lock_revision_drift(ctx, plan):
+            landed = restamp_layup_plan_order_lock(ctx, stage=LAYUP_OWNER)
+            notes.append(
+                "layup_plan_lock_restamped" if landed else "layup_plan_lock_revision_drift_kept"
+            )
         return
     # Owner key: the plan belongs to nugget_layup_compose whoever moved the
     # selection; fitting it to the committed order is that owner's paperwork.
