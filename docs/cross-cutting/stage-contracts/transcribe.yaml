@@ -30,6 +30,7 @@ consumers:
 - speaker_roles
 - content_context
 - segment_classification
+- nugget_corpus_mine
 remediation:
   strategies:
   - full_stage_rerun

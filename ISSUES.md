@@ -6992,6 +6992,61 @@ orchestrator runs DeepFilterNet regardless.
 Tests: `tests/test_full_auto_launch_api.py::test_keepalive_sees_the_orchestrator_driver`,
 `::test_keepalive_resume_never_inherits_a_fresh_request` (both fail on the old loop).
 
+## [193] STRUCTURAL: a spoken bridge outlived the segment it led into, and a must-air keep was omitted for lack of room (Nicket's exec_033, 2026-10-12, stopped at 58/72)
+
+**Stage / area:** `edl` (`build_flow1_edl`), live-EDL writer (`air_order.write_live_edl`)
+**Status:** FIXED
+
+**Seen:** the selection aired seg_025, seg_029, seg_027, seg_028 and
+`master/transitions.json` carried a cloned-voice bridge for the reverse seam
+seg_029 -> seg_027 ("That early gym audience pointed to a clearer product
+promise", source gap -13960 ms). Every EDL pass built a timeline (114 events,
+8 pickups), ordinary QC passed, and the strict narrative check refused the
+same single line three times: `transition clip "seg_029" -> "seg_027" does
+not sit between adjacent speech clips`. The same passes logged
+`removal_authority: refused to take must-air segment(s) off the order:
+seg_027, seg_031` (producer media_ip_cta). The driver hit
+`max_invokes_per_identity` on edl, the ship path was severed, stages 59-72
+never started.
+
+**Cause:** two builder defects behind one QC line.
+1. The seam glue toward the next segment (its spoken transition, a chapter
+   music bridge, the hitch air) is emitted at the end of the previous
+   iteration. Entry 190 made everything seated *for* a segment provisional
+   from the segment's own seat mark, so a segment the builder then omits as
+   unplayable took its before-VO back with it, but the inbound bridge sat
+   before that mark and stayed on the timeline pointing at a segment that is
+   not in ordered speech. Any planned transition into a segment the builder
+   omits reproduces the QC refusal.
+2. seg_027 and seg_031 were must-air keeps with under 400 ms of their own
+   tape and no room to widen (next clip's head or a never-touch interval).
+   The hard-keep path only guarded the "unplayable_short" omit; the
+   "unplayable_no_room" omit still fired for a protected keep. The builder
+   then asked the selection to drop them (`_omit_unplayable_keeps_from_selection`),
+   removal authority refused, and the selection kept ids the EDL never seated.
+   The builder also judged protection only under the on-air order while the
+   refusal judges under both the on-air and the proposed order.
+
+**Fix:**
+- The builder records a seam mark before the glue toward `nxt` and, when
+  `nxt` is omitted, rolls back to that mark instead of the seat mark: the
+  transition, bridge, hitch air and any `missing_transition_audio` note leave
+  with the segment. Recorded on `warnings.seam_glue_unseated_unplayable_target`
+  and logged.
+- A keep removal authority protects is never omitted at the no-room site: it
+  airs its own short tape (`air_bound_reason` ends `hard_keep_short_seat`)
+  and the bridge into it stays between the two clips. The builder judges
+  protection under both the on-air and the proposed order, as the refusal does.
+- Defence in depth for every other EDL producer: the live-EDL writer strips a
+  transition or chapter bridge whose pair is no longer adjacent in speech
+  (`strip_orphan_seam_glue`, pre-mix writes only), and a restored must-air clip
+  lands after the glue that leads into it, not before it.
+
+Tests: `tests/test_edl_seam_glue_omitted_with_unplayable_target.py` (six tests:
+control, omitted bridge, short seat, both-state judge, writer strip, restore
+placement; the omitted-bridge, short-seat and both-state-judge tests fail on
+the old builder, the control passes).
+
 # Planned: prune the job-API driver (phase 2 of entry 79)
 
 Sized on 2026-09-30 after the engine proofs (exec_062 full-auto, exec_064

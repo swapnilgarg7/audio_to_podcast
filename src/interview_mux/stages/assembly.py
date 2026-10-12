@@ -542,6 +542,10 @@ def build_flow1_edl(
     # Before-VO line ids whose target the builder omitted as unplayable. The
     # pickup is taken back off the timeline with its target (ISSUES 190).
     unseated_before_vo: list[str] = []
+    # Seam glue (spoken transition, chapter music bridge, hitch air) taken back
+    # because the segment it led into was omitted as unplayable (ISSUES 193).
+    unseated_seam_glue: list[str] = []
+    seam_mark: tuple[int, int, int, int, int, int] | None = None
     missing_transitions: list[str] = []
     # Seams where a cloned voice abuts the same native speaker. Recorded, never
     # suppressed: the EDL seats every line the gap report airs (ISSUES 184).
@@ -1122,31 +1126,65 @@ def build_flow1_edl(
             timeline_ms,
             len(missing_vo),
             len(clone_adjacency_advisory),
+            len(missing_transitions),
         )
+        # The seam glue the previous iteration emitted toward this segment (its
+        # spoken transition, a chapter music bridge, the hitch air) is
+        # provisional too. A transition clip whose before-segment never seats
+        # does not sit between adjacent speech clips, and narrative QC refused
+        # that EDL to the invoke cap (Nicket's exec_033, tr_seg_029_seg_027;
+        # ISSUES 193).
+        inbound_mark = (
+            seam_mark
+            if seam_mark is not None and seam_mark[0] <= seat_mark[0]
+            else seat_mark
+        )
+        seam_mark = None
 
         def _unseat_before_vo(reason: str) -> None:
             nonlocal timeline_ms
+            mark = inbound_mark
             taken_back = [
                 str(c.get("line_id") or "")
-                for c in clips[seat_mark[0] :]
+                for c in clips[mark[0] :]
                 if isinstance(c, dict) and c.get("type") == "vo_pickup"
             ]
-            del clips[seat_mark[0] :]
-            del gap_placements[seat_mark[1] :]
-            timeline_ms = seat_mark[2]
-            del missing_vo[seat_mark[3] :]
-            del clone_adjacency_advisory[seat_mark[4] :]
+            glue_back = [
+                f"{c.get('type')}:{c.get('after_segment_id') or ''}"
+                f"->{c.get('before_segment_id') or ''}"
+                for c in clips[mark[0] :]
+                if isinstance(c, dict)
+                and (
+                    c.get("type") == "transition"
+                    or str(c.get("air_kind") or "") == "chapter_music_bridge"
+                )
+            ]
+            del clips[mark[0] :]
+            del gap_placements[mark[1] :]
+            timeline_ms = mark[2]
+            del missing_vo[mark[3] :]
+            del clone_adjacency_advisory[mark[4] :]
+            del missing_transitions[mark[5] :]
             for lid in taken_back:
                 if lid and lid not in unseated_before_vo:
                     unseated_before_vo.append(lid)
-            if taken_back and ctx is not None:
+            for key in glue_back:
+                if key not in unseated_seam_glue:
+                    unseated_seam_glue.append(key)
+            if (taken_back or glue_back) and ctx is not None:
                 try:
                     ctx.log(
                         f"EDL: {sid} omitted as unplayable ({reason}); its before-VO "
-                        f"{taken_back} is omitted with it",
+                        f"{taken_back} and inbound seam glue {glue_back} are omitted "
+                        "with it",
                         level="warning",
                         stage="edl",
-                        detail={"segment_id": sid, "line_ids": taken_back, "reason": reason},
+                        detail={
+                            "segment_id": sid,
+                            "line_ids": taken_back,
+                            "seam_glue": glue_back,
+                            "reason": reason,
+                        },
                     )
                 except Exception:
                     pass
@@ -1300,15 +1338,20 @@ def build_flow1_edl(
                 if not hard_keep:
                     # Same judge as the live-EDL writer and removal authority:
                     # a keep they protect gets the min-air seat here instead of
-                    # an omit the selection then refuses (ISSUES 190).
+                    # an omit the selection then refuses (ISSUES 190). Judged
+                    # under both states, as the refusal is: the order with this
+                    # segment on air and the order the omit would produce.
                     try:
                         from interview_mux.removal_authority import removal_block_reason
 
+                        on_air = [str(o) for o in ordered]
+                        proposed = [o for o in on_air if o != str(sid)]
                         hard_keep = bool(
-                            removal_block_reason(ctx, sid, on_air=[str(o) for o in ordered])
-                        )
+                            removal_block_reason(ctx, sid, on_air=on_air)
+                        ) or bool(removal_block_reason(ctx, sid, on_air=proposed))
                     except Exception:
                         hard_keep = False
+            protected_keep = bool(hard_keep)
             if not hard_keep:
                 already_speech = any(
                     isinstance(c, dict) and c.get("type") == "speech" for c in clips
@@ -1337,6 +1380,7 @@ def build_flow1_edl(
             if raw_e > raw_s:
                 speech_start, speech_end = raw_s, raw_e
                 speech_dur = raw_e - raw_s
+            short_seat = False
             if speech_dur < 400:
                 room_end = speech_start + 400
                 nxt_id = ordered[idx + 1] if idx + 1 < len(ordered) else None
@@ -1357,14 +1401,33 @@ def build_flow1_edl(
                     elif speech_start < nt0 < room_end:
                         room_end = min(room_end, nt0)
                 if room_end - speech_start < 400 and nxt_id:
-                    omitted_unplayable.append(sid)
-                    _unseat_before_vo("unplayable_no_room")
-                    continue
-                speech_end = max(speech_start, room_end)
-                speech_dur = speech_end - speech_start
+                    if not (protected_keep and speech_end > speech_start):
+                        omitted_unplayable.append(sid)
+                        _unseat_before_vo("unplayable_no_room")
+                        continue
+                    # A keep removal authority protects is never omitted: the
+                    # selection refuses the drop and the EDL never matches it
+                    # again (Nicket's exec_033, seg_027 and seg_031; ISSUES
+                    # 193). Its own tape airs short.
+                    short_seat = True
+                    if ctx is not None:
+                        try:
+                            ctx.log(
+                                f"EDL: {sid} is must-air with "
+                                f"{speech_end - speech_start} ms of playable tape and "
+                                "no room to widen; seated short rather than omitted",
+                                level="warning",
+                                stage="edl",
+                            )
+                        except Exception:
+                            pass
+                else:
+                    speech_end = max(speech_start, room_end)
+                    speech_dur = speech_end - speech_start
             air_meta = dict(air_meta or {})
             air_meta["air_bound_reason"] = (
-                str(air_meta.get("air_bound_reason") or "") + "+hard_keep_min_air"
+                str(air_meta.get("air_bound_reason") or "")
+                + ("+hard_keep_short_seat" if short_seat else "+hard_keep_min_air")
             ).lstrip("+")
         if clips and str(clips[-1].get("type") or "") == "silence":
             pass
@@ -1418,6 +1481,16 @@ def build_flow1_edl(
 
         if idx + 1 < len(ordered):
             nxt = ordered[idx + 1]
+            # Everything from here to the next iteration's seat mark is the seam
+            # glue toward ``nxt``; it leaves with ``nxt`` if ``nxt`` is omitted.
+            seam_mark = (
+                len(clips),
+                len(gap_placements),
+                timeline_ms,
+                len(missing_vo),
+                len(clone_adjacency_advisory),
+                len(missing_transitions),
+            )
             tr = _transition_after_segment(transitions, sid, nxt)
             suppressed_transition = False
             if tr:
@@ -1607,6 +1680,7 @@ def build_flow1_edl(
             "missing_transition_audio": sorted(set(missing_transitions)),
             "clone_adjacency_advisory": sorted(set(clone_adjacency_advisory)),
             "vo_lines_unseated_unplayable_target": sorted(set(unseated_before_vo)),
+            "seam_glue_unseated_unplayable_target": sorted(set(unseated_seam_glue)),
             "clone_adjacency_id_mismatch_kept": sorted(
                 set(k for k in clone_adj.kept_despite_id() if k)
             ),
@@ -2130,6 +2204,14 @@ def run_edl(ctx: RunContext) -> None:
         ctx.log(
             "EDL: before-VO omitted with its unplayable target: "
             f"{warnings['vo_lines_unseated_unplayable_target']} "
+            f"(omitted segments {edl.get('omitted_unplayable_segment_ids')})",
+            level="warning",
+            stage="edl",
+        )
+    if warnings.get("seam_glue_unseated_unplayable_target"):
+        ctx.log(
+            "EDL: seam glue omitted with its unplayable target: "
+            f"{warnings['seam_glue_unseated_unplayable_target']} "
             f"(omitted segments {edl.get('omitted_unplayable_segment_ids')})",
             level="warning",
             stage="edl",

@@ -582,6 +582,19 @@ def restore_protected_speech_clips(
             ]
             if idxs:
                 at = idxs[-1] + 1
+                # Land after the seam glue the builder left toward this id
+                # (its transition, chapter bridge, hitch air), not before it:
+                # a transition behind both clips it joins is refused by
+                # narrative QC (ISSUES 193).
+                j = at
+                while (
+                    j < len(clips)
+                    and isinstance(clips[j], dict)
+                    and str(clips[j].get("type") or "") != "speech"
+                ):
+                    if str(clips[j].get("before_segment_id") or "") == sid:
+                        at = j + 1
+                    j += 1
                 break
         clips.insert(
             at,
@@ -627,6 +640,60 @@ def restore_protected_speech_clips(
     return restored
 
 
+def strip_orphan_seam_glue(edl: dict[str, Any]) -> list[str]:
+    """Drop seam glue that no longer joins the two speech clips it names.
+
+    A spoken transition or chapter music bridge carries the ids of the clips
+    it sits between. When an EDL producer drops or moves one of them after the
+    glue was seated, the glue sits between the wrong clips, and narrative QC
+    refuses the EDL on every pass as a transition that "does not sit between
+    adjacent speech clips" (Nicket's exec_033, tr_seg_029_seg_027; ISSUES
+    193). The writer is the one place every producer passes.
+    """
+    clips = edl.get("clips") if isinstance(edl, dict) else None
+    if not isinstance(clips, list):
+        return []
+    speech = [
+        str(c.get("segment_id"))
+        for c in clips
+        if isinstance(c, dict) and str(c.get("type") or "") == "speech" and c.get("segment_id")
+    ]
+    if not speech:
+        # Nothing to be adjacent to: a glue-only document is not an air order.
+        return []
+    seated = set(speech)
+    adjacent = {(speech[i], speech[i + 1]) for i in range(len(speech) - 1)}
+    kept: list[Any] = []
+    removed: list[str] = []
+    for c in clips:
+        if isinstance(c, dict) and (
+            str(c.get("type") or "") == "transition"
+            or str(c.get("air_kind") or "") == "chapter_music_bridge"
+        ):
+            after = str(c.get("after_segment_id") or "")
+            before = str(c.get("before_segment_id") or "")
+            orphan = False
+            if after and before:
+                orphan = (after, before) not in adjacent
+            elif after or before:
+                orphan = (after or before) not in seated
+            if orphan:
+                removed.append(f"{c.get('type')}:{after}->{before}")
+                continue
+        kept.append(c)
+    if not removed:
+        return []
+    from interview_mux.listenability_guards import reindex_clip_timeline
+
+    edl["clips"] = kept
+    edl["timeline_duration_ms"] = reindex_clip_timeline(kept)
+    warnings = edl.get("warnings") if isinstance(edl.get("warnings"), dict) else {}
+    prior = [str(x) for x in (warnings.get("seam_glue_unseated_unplayable_target") or [])]
+    warnings["seam_glue_unseated_unplayable_target"] = sorted(set(prior) | set(removed))
+    edl["warnings"] = warnings
+    return removed
+
+
 def write_live_edl(
     ctx: RunContext,
     edl: dict[str, Any],
@@ -666,6 +733,24 @@ def write_live_edl(
         try:
             if isinstance(edl_out, dict):
                 restore_protected_speech_clips(ctx, edl_out, source=source)
+        except Exception:
+            pass
+        # Pre-mix writes only: after mix the rendered master is aligned to the
+        # clip list, and junction/finalize keep their own alignment.
+        src_l = str(source or "").lower()
+        src_pre_mix = not any(
+            tag in src_l for tag in ("mix", "junction", "finalize", "master")
+        )
+        try:
+            if isinstance(edl_out, dict) and src_pre_mix:
+                stripped = strip_orphan_seam_glue(edl_out)
+                if stripped:
+                    ctx.log(
+                        "EDL write: seam glue no longer between the clips it joins "
+                        f"removed: {stripped} (source={source})",
+                        level="warning",
+                        stage=str(source or "edl"),
+                    )
         except Exception:
             pass
         if _committing(ctx):

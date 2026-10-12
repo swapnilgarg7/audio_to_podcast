@@ -271,6 +271,7 @@ _PREPARE: dict[str, dict[str, Any]] = {
             "speaker_roles",
             "content_context",
             "segment_classification",
+            "nugget_corpus_mine",
         ],
         # Local STT host — no OpenAI volley (TR-B1/B2).
         "remediation": ["full_stage_rerun"],
@@ -1667,6 +1668,9 @@ _PLAN_RANK: dict[str, dict[str, Any]] = {
         "inputs": {
             "soft": [
                 dep("understanding/nugget_corpus.json", producer=None),
+                # Full tape (ISSUES 191): words between segments and words a
+                # cut trims off are offered to the miner; absent file = no spans.
+                dep("transcript/full.json", producer="transcribe"),
                 dep("mastering/mastering_plan.json", producer="air_script_compose"),
                 *deps(
                     "mastering/media_ip_cta.json",

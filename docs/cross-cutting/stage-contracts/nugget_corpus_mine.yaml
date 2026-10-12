@@ -19,13 +19,13 @@ inputs:
   soft:
   - path: segments/manifest.json
     producer: segment_classification
-  - path: transcript/full.json
-    producer: transcribe
   - path: understanding/talking_points.json
     producer: talking_points_compose
   - path: understanding/ideal_cuts.json
     producer: ideal_cuts_propose
   - path: understanding/nugget_corpus.json
+  - path: transcript/full.json
+    producer: transcribe
   - path: mastering/mastering_plan.json
     producer: air_script_compose
   - path: mastering/media_ip_cta.json
