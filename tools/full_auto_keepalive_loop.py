@@ -35,7 +35,11 @@ ASSETS = ROOT / "ASSETS"
 STATUS = ASSETS / "full_auto_status.json"
 LOG = ASSETS / "full_auto_watchdog.log"
 RUN_POINTER = ASSETS / "full_auto_current_run.txt"
-_DRIVER_PGREP = r"full_auto_driver\.py|_baba_e2e_driver\.py"
+# Must match every driver shape the launcher can start, including the
+# in-process orchestrator (``python -m interview_mux orchestrate``). Without
+# that alternative the loop never saw the live driver, killed it on every
+# pass and relaunched it (exec_037..039 in one minute on 2026-10-12).
+_DRIVER_PGREP = r"full_auto_driver\.py|_baba_e2e_driver\.py|interview_mux orchestrate"
 
 
 def web_port() -> int:
@@ -66,6 +70,12 @@ def launch(mode: str, *extra: str) -> None:
     cmd = [str(py), str(ROOT / "tools" / "full_auto_daemon_launch.py"), mode, *extra, "--no-keepalive"]
     env = os.environ.copy()
     env["MUX_KEEPALIVE"] = "0"
+    # The launcher reads MUX_FRESH as a fresh request. The kickoff shell exports
+    # it as 1 and this loop inherits it, so a ``--run-id`` resume allocated a
+    # brand-new execution instead (2026-10-12). The arguments decide, not the
+    # inherited shell: resume pins 0, an explicit fresh pins 1.
+    if mode == "e2e":
+        env["MUX_FRESH"] = "1" if "--fresh" in extra else "0"
     subprocess.run(cmd, cwd=str(ROOT), check=False, env=env)
 
 

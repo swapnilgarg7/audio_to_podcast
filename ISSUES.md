@@ -6850,6 +6850,148 @@ Tests: `tests/test_air_order_integrity.py::test_resolved_policy_in_report` now
 asserts a critical reverse jump logs at warning under the default policy (fails
 without the fix).
 
+## [190] STRUCTURAL: lock revision read as a stale lay-up plan, and a before-VO left orphaned by an unplayable must-air fragment (granola, 2026-10-11, stopped at 45/72 and 58/72)
+
+**Stage / area:** `nugget_layup.layup_freshness_errors`, `order_hash`,
+`omit_ledger.air_contract_errors`, `selection_dependents._reconcile_layup_plan`,
+`stages.assembly.build_flow1_edl`, `publishability_boundary._check_unseated_required_vo`,
+`audit_repair_loop.maybe_repair_after_narrative_audit`
+**Status:** FIXED
+
+**Seen:** the delivery conductor stopped with two unfinished stages and
+resumed at the earlier one. (1) `master/selection.json` and
+`understanding/nugget_layup_plan.json` listed the same segments and shared
+content hash `8f474dd65fbafd40`, but selection sanitize had moved the lock to
+revision 19 (superseding an 18 with another hash, the order had moved and come
+back) while the plan still carried 15. The freshness check treated any
+revision mismatch as stale, compose was re-dispatched until
+`max_invokes_per_identity` (cap 3), and under the hard seat freeze set by
+`vo_synthesize` the publish could not restamp the plan or the gap report.
+(2) `edl` was refused three times by narrative QC with no `master/edl.json`:
+`seg_038`, a 200 ms interviewee fragment ("Right", ~16:14), was still on the
+air order as must-air with a synthesized lay-up aimed at it; the builder
+seated the pickup, then omitted the fragment as unplayable (under 400 ms
+with speech already on the timeline), so the pickup targeted a segment not in
+ordered speech (orphan). The media-IP removal pass could not take `seg_038`
+and `seg_034` off the order (must-air) and the live-EDL writer could not
+reseat a slab shorter than the playable floor. (3) `edl_narrative_audit` was
+denied an error-level persist of `master/selection.json` for a chapter
+relabel the freeze policy allowed but the ownership table (hard freeze owned
+by `selection_framing_apply`) refused. The two blocks closed on each other:
+`edl` checks lay-up freshness before it builds.
+
+**Cause:**
+- Freshness compared lock *revision* as well as content. A derivative built
+  for order H is valid for order H whatever the selection's revision; the
+  revision only says how many times sanitize restamped the lock. The same
+  comparison sat in the omit-ledger air contract.
+- The builder decides unplayable omission *after* it has emitted the
+  segment's before-VO, kept tape pause, chapter bridge and air pads. Nothing
+  took them back. The hard-keep judge in the builder also differed from the
+  one in removal authority and the live writer (no `on_air` view), so a keep
+  they protect was treated as droppable here and then undroppable there.
+- The audit repair checked the freeze policy row but not the ownership table.
+
+**Fix:**
+- `order_hash.order_locks_same_content` / `order_lock_revision_only_drift`:
+  content hash recomputed from the lock's id list (or the doc) decides;
+  revision is paperwork. `layup_freshness_errors` and
+  `omit_ledger.air_contract_errors` use it; `order_locks_match` is unchanged
+  for callers that want strict equality.
+- `nugget_layup.restamp_layup_plan_order_lock` copies the selection lock
+  forward as an `optional` write when only the revision differs;
+  `selection_dependents._reconcile_layup_plan` calls it and notes
+  `layup_plan_lock_restamped` / `layup_plan_lock_revision_drift_kept` instead
+  of adopting a plan that is already fresh.
+- `build_flow1_edl` snapshots the timeline before a segment's before-VO and,
+  on an unplayable omission, rolls clips, placements, timeline, missing-VO
+  and clone-adjacency notes back to it. The taken-back line ids are recorded
+  as `omitted_unplayable_vo_line_ids` (and under
+  `warnings.vo_lines_unseated_unplayable_target`, logged at warning). The
+  opening grammar follows the first *seated* clip, not air index 0. A keep
+  `removal_block_reason` protects gets the min-air seat instead of an omit.
+- `_check_unseated_required_vo` does not demand a seat for a line whose
+  target the EDL omitted as unplayable (or whose id the EDL lists as omitted
+  with it); no omit-ledger paperwork the edl stage may not write.
+- The audit repair asks `write_permitted` before the chapter relabel and
+  records `skip_relabel_chapters_not_permitted` at info level on refusal.
+
+Tests: `tests/test_layup_lock_revision_is_paperwork.py` (8),
+`tests/test_edl_before_vo_omitted_with_unplayable_target.py` (4),
+`tests/test_audit_repair_skips_unpermitted_selection_write.py` (1); the
+fixture of `test_edl_adopt_must_use_layup_owner_not_edl_stage_key` now carries
+real staleness in the lock ids (the one-writer admit copies selection ids onto
+the plan on write, so revision alone was its only evidence).
+
+## [191] FEATURE: nugget layup reads the full transcript, including words between segments and words a cut trims off (maintainer's request, 2026-10-11)
+
+**Stage / area:** `nugget_layup.build_corpus_mine_input`,
+`normalize_corpus_tape_status`, `segment_air_windows`,
+`build_between_segment_spans`, `build_layup_compose_input`,
+`rank_open_nuggets_for_target`, `_nuggets_spoken_by`,
+`media_ip_cta.nugget_from_never_touch`, `stages.analysis_extended.run_nugget_corpus_mine`
+**Status:** DONE
+
+**Request:** words between segments and words inside a segment that is not
+chosen for the master were lost to the lay-up. The app should still pick the
+best native segments and use those recordings; everything else on the tape
+stays in the running for synthetic VO. A cut only decides where one native
+clip ends and the next begins.
+
+**What changed:**
+- The mine packet carries `between_segment_spans[]` (transcript word runs
+  inside no manifest segment, split on >1.5 s pauses or a speaker change,
+  tape neighbours named), per-kept-segment `air_start_ms`/`air_end_ms`
+  (ideal cut ∩ slab) and `off_air_text`, `text_continued` for any row past
+  the packet cap (`segment_text_max_chars` 1500 → 4000), and a
+  `full_tape_doctrine`. The mine prompt tells the model to mine those spans
+  as `in_selection: false` nuggets with a tape span and never to mark them
+  aired.
+- At persist, `normalize_corpus_tape_status` re-judges every nugget from its
+  span against the selected air windows: outside them means open for VO
+  (`in_selection: false`, `already_aired_in_selection: false`,
+  `source_kind` `between_segments` / `off_air_span`); empty
+  `source_segment_ids` are filled from the overlapping slabs so id-keyed
+  consumers keep working. Never-touch tape is enforced by time as well as
+  by id.
+- Compose discharges a nugget only when its span overlaps the native's air
+  window, each native row carries `cut_words_before` / `cut_tape_window_ms`
+  (the words the seam dropped, tail-clipped to 600 chars) and ranked open
+  nuggets mined from that tape are boosted and flagged `cut_at_this_seam`.
+  The compose prompt points the writer at them.
+- Config: `analysis.nugget_layup.full_tape_spans` (on), `between_span_split_gap_ms`,
+  `between_span_max_chars`, `cut_words_before_max_chars`, `tape_window_boost`.
+  Docs: `docs/cross-cutting/nugget-layup-system.md` ("Full tape, not only the
+  segments"); stage contract lists `transcript/full.json` as a soft input.
+
+Tests: `tests/test_nugget_corpus_full_tape.py` (10).
+
+## [192] INFRA: keepalive never saw the orchestrator driver and relaunched it fresh every pass (kickoff on 2026-10-12, exec_037..039)
+
+**Stage / area:** `tools/full_auto_keepalive_loop.py`
+**Status:** FIXED
+
+**Seen:** a fresh full-auto kickoff allocated three executions in one minute
+(exec_037, 038, 039), each killed at `audio_preclean` and stamped
+"Server restarted — infrastructure interrupt". The watchdog log read
+"e2e down — resume exec_037" one second after the driver bound.
+
+**Cause:** the loop's `_DRIVER_PGREP` still listed only the job-API driver
+scripts; the launcher's pattern had gained `interview_mux orchestrate` when the
+in-process orchestrator replaced the driver (entry 79). The loop therefore
+never saw a live driver, and its `launch("e2e", "--run-id", ...)` inherited
+the kickoff shell's `MUX_FRESH=1`, which the launcher reads as a fresh request
+(`env_fresh_requested`), so every "resume" allocated a new execution.
+
+**Fix:** the loop's pattern equals the launcher's; `launch()` pins
+`MUX_FRESH` from its own arguments (resume 0, `--fresh` 1). The three orphan
+execution folders are left in place (executions are never deleted).
+Note: `MUX_SKIP_PRECLEAN` is honoured only by the legacy driver; the
+orchestrator runs DeepFilterNet regardless.
+
+Tests: `tests/test_full_auto_launch_api.py::test_keepalive_sees_the_orchestrator_driver`,
+`::test_keepalive_resume_never_inherits_a_fresh_request` (both fail on the old loop).
+
 # Planned: prune the job-API driver (phase 2 of entry 79)
 
 Sized on 2026-09-30 after the engine proofs (exec_062 full-auto, exec_064

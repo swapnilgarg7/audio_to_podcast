@@ -520,6 +520,38 @@ def test_keepalive_launch_disables_nested_keepalive(monkeypatch) -> None:
     assert captured["env"]["MUX_KEEPALIVE"] == "0"
 
 
+def test_keepalive_sees_the_orchestrator_driver() -> None:
+    """The loop's pattern matches the in-process orchestrator the launcher starts."""
+    import re
+
+    import full_auto_daemon_launch as dal
+    import full_auto_keepalive_loop as keepalive
+
+    cmdline = "/x/.venv/bin/python -u -m interview_mux orchestrate --mode full-auto --input ASSETS/input/a.wav"
+    assert re.search(keepalive._DRIVER_PGREP, cmdline)
+    assert re.search(dal._DRIVER_PGREP, cmdline)
+    assert keepalive._DRIVER_PGREP == dal._DRIVER_PGREP
+
+
+def test_keepalive_resume_never_inherits_a_fresh_request(monkeypatch) -> None:
+    import full_auto_keepalive_loop as keepalive
+
+    captured: dict = {}
+
+    def _run(cmd, cwd, check, env):  # type: ignore[no-untyped-def]
+        captured["cmd"] = cmd
+        captured["env"] = env
+
+    monkeypatch.setattr("subprocess.run", _run)
+    monkeypatch.setenv("MUX_FRESH", "1")
+    keepalive.launch("e2e", "--run-id", "exec_test")
+    assert captured["env"]["MUX_FRESH"] == "0"
+    keepalive.launch("e2e", "--fresh")
+    assert captured["env"]["MUX_FRESH"] == "1"
+    keepalive.launch("server")
+    assert captured["env"]["MUX_FRESH"] == "1"
+
+
 def test_keepalive_fresh_bind_in_progress(tmp_path, monkeypatch) -> None:
     import full_auto_daemon_launch as dal
     import full_auto_keepalive_loop as keepalive
