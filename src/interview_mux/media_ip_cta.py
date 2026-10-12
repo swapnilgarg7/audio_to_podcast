@@ -2814,15 +2814,18 @@ def strip_never_touch_nuggets(ctx: RunContext, corpus: dict[str, Any] | None) ->
     """Remove any nuggets whose evidence sits on a dropped CTA clip."""
     out = dict(corpus) if isinstance(corpus, dict) else {"nuggets": []}
     banned = never_touch_segment_ids(ctx)
-    if not banned:
+    try:
+        intervals = never_touch_source_intervals(ctx)
+    except Exception:
+        intervals = []
+    if not banned and not intervals:
         return out
     kept: list[dict[str, Any]] = []
     dropped_ids: list[str] = []
     for nug in out.get("nuggets") or []:
         if not isinstance(nug, dict):
             continue
-        sources = {str(x) for x in (nug.get("source_segment_ids") or []) if x}
-        if sources & banned:
+        if nugget_from_never_touch(ctx, nug, banned_ids=banned, intervals=intervals):
             nid = str(nug.get("nugget_id") or "")
             if nid:
                 dropped_ids.append(nid)
@@ -2924,11 +2927,51 @@ def apply_cover_policy(
     return out, notes
 
 
-def nugget_from_never_touch(ctx: RunContext, nugget: dict[str, Any] | None) -> bool:
+def nugget_from_never_touch(
+    ctx: RunContext,
+    nugget: dict[str, Any] | None,
+    *,
+    banned_ids: set[str] | None = None,
+    intervals: list[tuple[int, int, str]] | None = None,
+) -> bool:
+    """True when a nugget's tape is CTA / never-touch, by segment id or by time.
+
+    Full-tape mining (ISSUES 191) yields nuggets with no segment id (words
+    between segments), so the source span is judged against the never-touch
+    intervals too. Callers that loop pass ``banned_ids`` / ``intervals`` once.
+    """
     if not isinstance(nugget, dict):
         return False
+    banned = banned_ids if banned_ids is not None else never_touch_segment_ids(ctx)
     sources = {str(x) for x in (nugget.get("source_segment_ids") or []) if x}
-    return bool(sources & never_touch_segment_ids(ctx))
+    if sources & set(banned or set()):
+        return True
+    ranges = intervals
+    if ranges is None:
+        try:
+            ranges = never_touch_source_intervals(ctx)
+        except Exception:
+            ranges = []
+    if not ranges:
+        return False
+    try:
+        s0 = nugget.get("source_start_ms")
+        e0 = nugget.get("source_end_ms")
+        if s0 is None or e0 is None:
+            return False
+        start, end = int(s0), int(e0)
+    except (TypeError, ValueError):
+        return False
+    if end <= start:
+        return False
+    for interval in ranges:
+        try:
+            nt0, nt1 = int(interval[0]), int(interval[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if nt0 < end and start < nt1:
+            return True
+    return False
 
 
 def _write_state(ctx: RunContext, state: dict[str, Any]) -> None:

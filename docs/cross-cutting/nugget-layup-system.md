@@ -40,6 +40,31 @@ Secondary row-density metric **`min_layup_coverage`** default **0.70** (raised f
 
 Low-conf fuse + density must_keep: [low-conf-connector-fuse.md](./low-conf-connector-fuse.md).
 
+## Full tape, not only the segments (ISSUES 191)
+
+Selection decides which recordings air natively. A cut only decides where one
+native clip ends and the next begins; it never drops the words that follow.
+Everything else on the tape stays in the running for synthetic VO:
+
+| Where the words sit | How the layup sees them |
+|---------------------|-------------------------|
+| Between two segments (inside no manifest row) | `build_corpus_mine_input` emits `between_segment_spans[]` from `transcript/full.json` (runs split on >1.5 s pauses or a speaker change, tape neighbours named). A nugget mined there has `source_segment_ids: []` and a tape span. |
+| Inside a kept segment but past its cut | The kept row carries `air_start_ms`/`air_end_ms` (ideal cut ∩ slab, `segment_air_windows`) and `off_air_text`. |
+| Past the packet cap | `text_continued` carries the overflow; `segment_text_max_chars` default is 4000. |
+| Inside an excluded segment | As before: `in_selection: false` rows. |
+
+`normalize_corpus_tape_status` (run at `nugget_corpus_mine` persist) re-judges
+every nugget from its span: outside every selected air window means
+`in_selection: false`, `already_aired_in_selection: false`, `source_kind`
+`between_segments` / `off_air_span`; empty `source_segment_ids` are filled from
+the slabs the span overlaps. Never-touch tape is enforced by time as well as by
+id (`nugget_from_never_touch`). At compose, `_nuggets_spoken_by` discharges a
+nugget only when its span overlaps the native's air window, each native row
+carries `cut_words_before` (the words the seam dropped, tail-clipped) and
+`open_nuggets_ranked` boosts nuggets cut at that seam (`cut_at_this_seam`,
+`tape_window_boost`). Config: `analysis.nugget_layup.full_tape_spans`,
+`between_span_split_gap_ms`, `between_span_max_chars`, `cut_words_before_max_chars`.
+
 ## Authority vs legacy VO planners
 
 | Legacy | Role under layup authority |
@@ -53,7 +78,7 @@ Low-conf fuse + density must_keep: [low-conf-connector-fuse.md](./low-conf-conne
 
 | Guard | Where | Behaviour |
 |-------|-------|-----------|
-| **Freshness** | `assert_layup_fresh_vs_selection` — compose persist, publish, recompose, `edl` | Hard stop when the plan is `_meta.stale` or its `ordered_segment_ids` ≠ `master/selection.json`. Selection owns `order_lock` — compose strips any LLM-invented lock then stamps via `attach_selection_order_lock` **before** freshness. Re-run `nugget_corpus_mine` → `nugget_layup_compose`; never republish a stale plan. |
+| **Freshness** | `assert_layup_fresh_vs_selection` — compose persist, publish, recompose, `edl` | Hard stop when the plan is `_meta.stale`, its `ordered_segment_ids` ≠ `master/selection.json`, or the lock *content* differs (`order_locks_same_content`). A lock that differs only by revision is paperwork (ISSUES 190): the plan is fresh, and `selection_dependents` copies the lock forward as a courtesy write when the owner may write. Selection owns `order_lock` — compose strips any LLM-invented lock then stamps via `attach_selection_order_lock` **before** freshness. Re-run `nugget_corpus_mine` → `nugget_layup_compose`; never republish a stale plan. |
 | **Dual SSOT (H3)** | `gap_report` vs `nugget_layup_plan` | **Gap owns air** (VO count, hosted floor, what synthesizes). **Plan owns ledger** (QC, skips, waived/open ids, `compose_shards_pending` / `compose_qc_pending`). Floor restore may keep prior gap lines without re-airing typed-skip plan rows. |
 | **QC before publish (P1)** | `run_nugget_layup_compose.persist` | Recover/park/spine run in memory; authoritative gap publish only after QC would pass. On fail: stamp `_meta.compose_qc_pending`, keep prior gap. |
 | **Craft spine (H1/P7)** | `apply_craft_spine_or_skip` | After ≤1 degraded LLM regen, craft fail → corpus-grounded spine or typed skip — never a third LLM call. |

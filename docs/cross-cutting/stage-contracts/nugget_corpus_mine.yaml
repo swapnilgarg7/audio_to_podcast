@@ -19,6 +19,8 @@ inputs:
   soft:
   - path: segments/manifest.json
     producer: segment_classification
+  - path: transcript/full.json
+    producer: transcribe
   - path: understanding/talking_points.json
     producer: talking_points_compose
   - path: understanding/ideal_cuts.json

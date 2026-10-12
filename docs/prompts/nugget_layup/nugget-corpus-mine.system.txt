@@ -1,12 +1,18 @@
 Mine atomic grounded information nuggets from the **full interview transcript** (all speakers), including spans that selection dropped.
 
-You receive: ordered selection ids, compact segment rows (`in_selection` true/false + text), talking points, ideal cuts, and optional gap evaluations.
+You receive: ordered selection ids, compact segment rows (`in_selection` true/false + text), talking points, ideal cuts, optional gap evaluations, and the rest of the tape:
+- `between_segment_spans[]` — runs of transcript words that sit inside **no** segment at all (`span_id`, `start_ms`/`end_ms`, `speaker_id`, `text`, `prev_segment_id`/`next_segment_id` = tape neighbours). Nobody hears these on air.
+- On each kept segment row: `air_start_ms`/`air_end_ms` (the part that airs) and `off_air_text` (words of that same segment the cut trims off). The listener hears only the air window.
+- `text_continued` on any row whose text overflowed the packet cap: the overflow is part of the segment, not a different one.
+- `full_tape_doctrine` — read it. A cut only decides where one native clip ends and the next begins; it never drops the words that follow.
+
+Every spoken line on the tape is in play. Mine `between_segment_spans` and `off_air_text` as eagerly as excluded segments: a fact that lives there is a nugget with `in_selection: false`, **always** with `source_start_ms`/`source_end_ms` from the span, and never `already_aired_in_selection: true`. A between-segment nugget carries `source_segment_ids: []`; an off-air nugget names the segment it was cut from. Code re-judges air status from the tape, so set the span honestly.
 
 Goals:
 - Emit atomic `nuggets` — one clear claim each — with a short `evidence_quote` that appears in the provided segment/transcript text.
 - Prefer high-value excluded (`in_selection: false`) facts that listeners would miss (origin stories, pivots, numbers, ESOP/culture, deal terms).
 - Still include on-air-adjacent context when it uniquely unlocks a later beat.
-- Mark `already_aired_in_selection: true` when the same claim is fully spoken in a kept segment (do not recover those later as VO).
+- Mark `already_aired_in_selection: true` only when the same claim is fully spoken **inside a kept segment's air window** (`air_start_ms`..`air_end_ms`). A claim spoken in `off_air_text` or in a between-segment span is not aired, however close it sits to kept tape.
 - Attach `talking_point_ids` when a nugget discharges a talking point; set `salience` honestly (`critical`/`high` for must-keep recovery candidates).
 - Prefer mining claims from **high-confidence** spans. When evidence sits in a loose low-conf / lexicon island, set `evidence_partial: true` and keep `evidence_quote` to **comprehensible** tokens only — never fabricate the unclear word.
 - Optionally set `grounding_quality` to `high` | `mixed` | `weak` from confidence on the evidence span.

@@ -446,8 +446,13 @@ def run_nugget_corpus_mine(ctx: RunContext) -> None:
 
     def persist_corpus(c: RunContext, artifacts: dict) -> None:
         from interview_mux.media_ip_cta import strip_never_touch_nuggets
+        from interview_mux.nugget_layup import normalize_corpus_tape_status
 
-        persist(c, strip_never_touch_nuggets(c, artifacts if isinstance(artifacts, dict) else {}))
+        doc = artifacts if isinstance(artifacts, dict) else {}
+        # The tape decides what aired (ISSUES 191): a nugget spoken between
+        # segments or in the part a cut trims off stays open for VO.
+        doc = normalize_corpus_tape_status(c, doc)
+        persist(c, strip_never_touch_nuggets(c, doc))
 
     # NCM-B2: auto_complete=False so empty corpus cannot hollow-stamp via mark_done;
     # heal_or_raise refuses when enabled mine yields zero nuggets.
