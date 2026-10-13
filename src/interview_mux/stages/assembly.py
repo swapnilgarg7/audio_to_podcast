@@ -1380,7 +1380,6 @@ def build_flow1_edl(
             if raw_e > raw_s:
                 speech_start, speech_end = raw_s, raw_e
                 speech_dur = raw_e - raw_s
-            short_seat = False
             if speech_dur < 400:
                 room_end = speech_start + 400
                 nxt_id = ordered[idx + 1] if idx + 1 < len(ordered) else None
@@ -1401,33 +1400,33 @@ def build_flow1_edl(
                     elif speech_start < nt0 < room_end:
                         room_end = min(room_end, nt0)
                 if room_end - speech_start < 400 and nxt_id:
-                    if not (protected_keep and speech_end > speech_start):
-                        omitted_unplayable.append(sid)
-                        _unseat_before_vo("unplayable_no_room")
-                        continue
-                    # A keep removal authority protects is never omitted: the
-                    # selection refuses the drop and the EDL never matches it
-                    # again (Nicket's exec_033, seg_027 and seg_031; ISSUES
-                    # 193). Its own tape airs short.
-                    short_seat = True
-                    if ctx is not None:
+                    # No room for a playable seat, protected or not: a speech
+                    # clip under the minimum never passes the post-EDL
+                    # publishability gate (never_touch_zeroed_keep, exec_041
+                    # seg_070), so the keep is omitted here and recorded. The
+                    # selection keeps a protected id (removal authority refuses
+                    # the drop) and the seated checks discount the omission;
+                    # the seam glue into it leaves with it (ISSUES 193).
+                    if protected_keep and ctx is not None:
                         try:
                             ctx.log(
                                 f"EDL: {sid} is must-air with "
                                 f"{speech_end - speech_start} ms of playable tape and "
-                                "no room to widen; seated short rather than omitted",
+                                "no room to widen; omitted as unplayable (the "
+                                "selection keeps it, the EDL records the omission)",
                                 level="warning",
                                 stage="edl",
                             )
                         except Exception:
                             pass
-                else:
-                    speech_end = max(speech_start, room_end)
-                    speech_dur = speech_end - speech_start
+                    omitted_unplayable.append(sid)
+                    _unseat_before_vo("unplayable_no_room")
+                    continue
+                speech_end = max(speech_start, room_end)
+                speech_dur = speech_end - speech_start
             air_meta = dict(air_meta or {})
             air_meta["air_bound_reason"] = (
-                str(air_meta.get("air_bound_reason") or "")
-                + ("+hard_keep_short_seat" if short_seat else "+hard_keep_min_air")
+                str(air_meta.get("air_bound_reason") or "") + "+hard_keep_min_air"
             ).lstrip("+")
         if clips and str(clips[-1].get("type") or "") == "silence":
             pass

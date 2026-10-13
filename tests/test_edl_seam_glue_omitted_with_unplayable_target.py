@@ -95,8 +95,12 @@ def ctx(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     return isolated_run_ctx(tmp_path, "seam_glue_unplayable")
 
 
-def test_a_must_air_keep_with_no_room_is_seated_short_not_omitted(ctx, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_must_air_keep_with_no_room_is_omitted_with_its_bridge(ctx, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A speech clip under the minimum never passes publishability
+    (never_touch_zeroed_keep, exec_041 seg_070), so a protected keep with no
+    room is omitted, its bridge leaves with it, and the selection keeps it."""
     import interview_mux.removal_authority as removal_authority
+    from interview_mux.publishability_boundary import _check_zero_keeps
 
     monkeypatch.setattr(removal_authority, "protected_segment_ids", lambda *a, **k: {"seg_027"})
     tight = {
@@ -105,13 +109,12 @@ def test_a_must_air_keep_with_no_room_is_seated_short_not_omitted(ctx, tmp_path:
         "seg_028": dict(SEGMENTS["seg_028"], start_ms=38_340, end_ms=48_000),
     }
     edl = _build(tmp_path, segments=tight, ctx=ctx)
-    speech = {c["segment_id"]: c for c in edl["clips"] if c["type"] == "speech"}
-    assert "seg_027" in speech
-    assert speech["seg_027"]["duration_ms"] == 300
-    assert "hard_keep_short_seat" in str(speech["seg_027"].get("air_bound_reason") or "")
-    assert edl["omitted_unplayable_segment_ids"] == []
-    assert _speech_order(edl) == ORDER
-    assert [(c["after_segment_id"], c["before_segment_id"]) for c in edl["clips"] if c["type"] == "transition"] == [("seg_029", "seg_027")]
+    assert _speech_order(edl) == ["seg_025", "seg_029", "seg_028"]
+    assert edl["omitted_unplayable_segment_ids"] == ["seg_027"]
+    assert [c for c in edl["clips"] if c["type"] == "transition"] == []
+    assert edl["warnings"]["seam_glue_unseated_unplayable_target"] == ["transition:seg_029->seg_027"]
+    assert all(c["duration_ms"] >= 400 for c in edl["clips"] if c["type"] == "speech")
+    assert _check_zero_keeps(ctx, edl) == []
     assert _transition_errors(edl) == []
     _assert_contiguous(edl)
 

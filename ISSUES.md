@@ -7033,19 +7033,63 @@ never started.
   transition, bridge, hitch air and any `missing_transition_audio` note leave
   with the segment. Recorded on `warnings.seam_glue_unseated_unplayable_target`
   and logged.
-- A keep removal authority protects is never omitted at the no-room site: it
-  airs its own short tape (`air_bound_reason` ends `hard_keep_short_seat`)
-  and the bridge into it stays between the two clips. The builder judges
-  protection under both the on-air and the proposed order, as the refusal does.
+- A protected keep with no room is still omitted (a speech clip under the
+  minimum never passes the post-EDL publishability gate: the first cut of
+  this fix seated seg_070, a 200 ms "yeah." an impact block marked must-air,
+  short, and `never_touch_zeroed_keep` refused every rebuild to the cap on
+  exec_041). The omission is recorded, the selection keeps the id, the seated
+  checks discount it, and with the rollback above its bridge leaves with it,
+  so the rebuild converges. The builder judges protection under both the
+  on-air and the proposed order, as the refusal does.
 - Defence in depth for every other EDL producer: the live-EDL writer strips a
   transition or chapter bridge whose pair is no longer adjacent in speech
   (`strip_orphan_seam_glue`, pre-mix writes only), and a restored must-air clip
   lands after the glue that leads into it, not before it.
 
 Tests: `tests/test_edl_seam_glue_omitted_with_unplayable_target.py` (six tests:
-control, omitted bridge, short seat, both-state judge, writer strip, restore
-placement; the omitted-bridge, short-seat and both-state-judge tests fail on
-the old builder, the control passes).
+control, omitted bridge, protected keep with no room omitted with its bridge
+and clean under `_check_zero_keeps`, both-state judge, writer strip, restore
+placement; the omitted-bridge and no-room tests fail on the old builder, the
+control passes).
+
+## [194] STRUCTURAL: a sanitize block named its own remedy and nobody ran it (exec_041, 2026-10-13, stopped at 56/72)
+
+**Stage / area:** `stage_input_checks.require_stage_inputs` (every stage's preflight)
+**Status:** FIXED
+
+**Seen:** junction_snip_qa failed its inner remaster on an EDL/selection drift
+(the overlap repair merged seg_078 into seg_076 on the EDL while the seat
+freeze refused the matching selection commit). Its recovery unmarked edl,
+full_master_ranking, nugget_layup_compose, selection_order_sanitize and
+sound_design_plan. Every re-walk then dispatched full_master_ranking first,
+whose input check refused: `selection_unsanitary:
+selection_needs_sanitize:drop_orphan_ref,bump_order_lock,
+incomplete_seam_pull_completion. Remediation: Run the matching sanitize
+stage`. The identical-failure counter climbed to 4/3, the driver's second
+wind re-entered once, and the run stopped with `SeedPrerequisiteFailed`
+and verdict FAIL at 56 stages. A dry `sanitize_master_selection` on that
+selection reports exactly those three actions and no errors.
+
+**Cause:** the remedy, selection_order_sanitize, is the stage *after*
+full_master_ranking in the delivery order. The seed walk resolves
+prerequisites that come before a stage; the token map
+(`selection_unsanitary -> selection_order_sanitize`) is a resume target for
+operators; and the preflight recovery hook only handled VO-contract and
+stale-upstream issues. So a sanitize issue that pointed forward in the order
+was printed on every pass and acted on by none.
+
+**Fix:** `require_stage_inputs` runs the sanitize stage a `sanitize` issue
+names (selection / gap / air_contract) once ahead of the blocked stage,
+clearing a stale done marker first, then re-collects the issues; a remedy
+that does not clear the block, or that fails, leaves the refusal in the
+blocked stage's own words. A sanitize stage is never its own remedy.
+
+Note: the junction drift that fed this (overlap merge committed on the EDL
+but refused on the selection under the seat freeze) is the next root-cause
+candidate; with this entry its recovery converges instead of stopping the run.
+
+Tests: `tests/test_stage_input_sanitize_remedy.py` (five tests; the first
+three fail on the old check).
 
 # Planned: prune the job-API driver (phase 2 of entry 79)
 

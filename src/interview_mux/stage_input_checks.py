@@ -116,11 +116,92 @@ def collect_stage_input_issues(ctx: RunContext, stage_id: str) -> list[StageInpu
     return issues
 
 
+_SANITIZE_REMEDY_STAGES = frozenset(
+    {"selection_order_sanitize", "gap_report_sanitize", "air_contract_sanitize"}
+)
+
+
+def _run_sanitize_remedy(
+    ctx: RunContext,
+    stage_id: str,
+    issues: list[StageInputIssue],
+) -> bool:
+    """Run the sanitize stage a sanitize issue names, once, ahead of the blocked stage.
+
+    A sanitize issue carries its own remedy (``related_stage``). When that
+    stage sits *after* the blocked stage in the order, nothing dispatches it:
+    exec_041 (2026-10-13) had junction's recovery unmark full_master_ranking,
+    whose input check then refused the unsanitary selection junction left
+    behind (drop_orphan_ref, bump_order_lock, incomplete_seam_pull_completion);
+    selection_order_sanitize is the next stage, so the seed walk re-dispatched
+    ranking to the identical-failure cap and the run stopped with the remedy
+    printed in every error line (ISSUES 194). The remedy is deterministic and
+    cheap; run it here and let the caller re-collect.
+    """
+    remedies: list[str] = []
+    for issue in issues:
+        if issue.kind != "sanitize":
+            continue
+        remedy = str(issue.related_stage or "").strip()
+        if remedy in _SANITIZE_REMEDY_STAGES and remedy != stage_id and remedy not in remedies:
+            remedies.append(remedy)
+    if not remedies:
+        return False
+    ran = getattr(ctx, "_sanitize_remedy_ran", None)
+    if not isinstance(ran, set):
+        ran = set()
+        setattr(ctx, "_sanitize_remedy_ran", ran)
+    did = False
+    for remedy in remedies:
+        key = f"{stage_id}<-{remedy}"
+        if key in ran:
+            continue
+        ran.add(key)
+        why = next(
+            (i.message for i in issues if i.kind == "sanitize" and i.related_stage == remedy),
+            "",
+        )
+        try:
+            ctx.log(
+                f"Stage input check: {stage_id} blocked on {why[:140]}; running "
+                f"{remedy} first",
+                level="warning",
+                stage=stage_id,
+                detail={"event": "sanitize_remedy_ahead", "remedy": remedy, "issue": why[:300]},
+            )
+        except Exception:
+            pass
+        try:
+            if ctx.is_done(remedy):
+                from interview_mux.homunculus.agenda import unmark_stage_only
+
+                unmark_stage_only(ctx, remedy)
+            from interview_mux.pipeline import run_single_stage
+
+            run_single_stage(ctx, remedy)
+            did = True
+        except Exception as exc:  # noqa: BLE001 - the caller re-collects and refuses in its own words
+            try:
+                ctx.log(
+                    f"{remedy} ahead of {stage_id} did not land: "
+                    f"{type(exc).__name__}: {str(exc)[:200]}",
+                    level="warning",
+                    stage=stage_id,
+                )
+            except Exception:
+                pass
+    return did
+
+
 def require_stage_inputs(ctx: RunContext, stage_id: str) -> None:
     """Raise StageInputError when prerequisites are not satisfied."""
     issues = collect_stage_input_issues(ctx, stage_id)
     if not issues:
         return
+    if _run_sanitize_remedy(ctx, stage_id, issues):
+        issues = collect_stage_input_issues(ctx, stage_id)
+        if not issues:
+            return
     if _try_preflight_recovery(ctx, stage_id, issues):
         issues = collect_stage_input_issues(ctx, stage_id)
         if not issues:
