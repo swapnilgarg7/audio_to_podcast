@@ -346,6 +346,56 @@ def incomplete_seam_pairs(
     return pairs
 
 
+def blank_seam_completion_ids(
+    ctx: RunContext,
+    selection: dict[str, Any],
+    ordered: list[str],
+    spans: dict[str, dict[str, Any]],
+    *,
+    words: list[dict[str, Any]] | None = None,
+) -> set[str]:
+    """Off-air seam completions that are blank or unusable: never pulled back.
+
+    The seam repair pulled seg_063 (360 ms, excluded as blank by
+    selection_order_sanitize) back behind seg_062 on every selection commit.
+    Under the seat freeze that addition turned every producer's omit-only
+    delta into a reorder, the gate refused the whole write, and the blank was
+    dropped again (``drop_blank_under_freeze``). The overlap repair's retire of
+    an absorbed id lost the same way on every attempt, so the selection kept an
+    id the EDL had merged away and no EDL rebuild could match it (exec_041
+    seg_078 behind seg_063; ISSUES 195).
+    """
+    on_air = {str(s) for s in ordered if s}
+    try:
+        pairs = incomplete_seam_pairs(spans, on_air=on_air, words=words)
+    except Exception:
+        return set()
+    candidates = {str(b) for _a, b in pairs if str(b) not in on_air}
+    if not candidates:
+        return set()
+    reasons: dict[str, str] = {}
+    for row in (selection or {}).get("excluded_segment_ids") or []:
+        if isinstance(row, dict):
+            reasons[str(row.get("segment_id") or "")] = str(row.get("reason") or "")
+    rationales = (selection or {}).get("exclude_rationales")
+    if isinstance(rationales, dict):
+        for sid, why in rationales.items():
+            reasons.setdefault(str(sid), str(why or ""))
+    out: set[str] = set()
+    for sid in sorted(candidates):
+        if "blank_or_unusable" in reasons.get(sid, ""):
+            out.add(sid)
+            continue
+        try:
+            from interview_mux.artifact_repairs import _segment_is_blank_or_unusable
+
+            if _segment_is_blank_or_unusable(ctx, sid):
+                out.add(sid)
+        except Exception:
+            pass
+    return out
+
+
 def repair_incomplete_seam_order(
     ordered: list[str],
     spans: dict[str, dict[str, Any]],
@@ -1345,6 +1395,11 @@ def repair_air_order_integrity(
     spans = resolved_segment_spans(ctx)
     words = _load_transcript_words(ctx)
     ordered_after = [str(s) for s in (out.get("ordered_segment_ids") or []) if s]
+    # A blank completion is dropped again the moment it lands; pulling it is
+    # the oscillation that refused every write under the freeze (ISSUES 195).
+    blocked = set(blocked) | blank_seam_completion_ids(
+        ctx, out, ordered_after, spans, words=words or None
+    )
     seam_order, seam_actions = repair_incomplete_seam_order(
         ordered_after,
         spans,

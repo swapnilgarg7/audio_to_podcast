@@ -808,13 +808,34 @@ def retire_consumed_ids_from_selection(ctx: RunContext) -> list[str]:
         checkpoint_mode="detect",
         write_committed=True,
     )
-    ctx.log(
-        "EDL overlap merge: retired absorbed id(s) from selection: "
-        + ", ".join(retired[:6]),
-        level="success",
-        stage="edl",
-        detail=STAGE_KEY,
-    )
+    # The commit path may have restored the order (seat freeze, removal
+    # authority); say what landed, not what was asked (ISSUES 195).
+    try:
+        landed = ctx.read_json("master/selection.json")
+    except Exception:
+        landed = None
+    still = {
+        str(s) for s in ((landed or {}).get("ordered_segment_ids") or []) if s
+    } if isinstance(landed, dict) else set()
+    refused = [s for s in retired if s in still]
+    retired = [s for s in retired if s not in still]
+    if refused:
+        ctx.log(
+            "EDL overlap merge: selection still carries absorbed id(s) "
+            + ", ".join(refused[:6])
+            + "; the retire did not land (seat freeze or removal authority restored the order)",
+            level="warning",
+            stage="edl",
+            detail=STAGE_KEY,
+        )
+    if retired:
+        ctx.log(
+            "EDL overlap merge: retired absorbed id(s) from selection: "
+            + ", ".join(retired[:6]),
+            level="success",
+            stage="edl",
+            detail=STAGE_KEY,
+        )
     return retired
 
 

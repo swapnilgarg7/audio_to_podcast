@@ -43,6 +43,7 @@ END_A_CORE_ACTIONS: frozenset[str] = frozenset(
         "drop_seated_missing_from_gap",
         "clamp_hosted_seats_to_rendered_wavs",
         "drop_blank_segments_under_freeze",
+        "retire_consumed_under_freeze",
         "stamp_pair_freeze",
         "trim_pair_freeze",
         "framing_dedupe",

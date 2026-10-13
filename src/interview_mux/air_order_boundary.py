@@ -191,6 +191,73 @@ def _drop_blank_segments_under_freeze(
     return out
 
 
+def _retire_consumed_under_freeze(
+    ctx: RunContext, selection: dict[str, Any]
+) -> dict[str, Any]:
+    """After a seat-freeze order restore, a union-absorbed id still leaves air.
+
+    A fuse / overlap union already committed the merge on the EDL and in the
+    manifest; the consumed id's tape airs under its survivor. Restoring the
+    id into the order strands the selection at n+1 versus the EDL, every
+    rebuild re-seats it, the next mix merges it again, and the walk ends at
+    the invoke cap (exec_041 seg_078, Nicket's exec_033; ISSUES 195). The
+    retire is bookkeeping, not a seat opportunity, so it lands here whatever
+    else the gate refused in the same write.
+    """
+    from interview_mux.artifact_repairs import reconcile_ordered_vs_excluded
+
+    out = dict(selection)
+    order = [str(s) for s in (out.get("ordered_segment_ids") or []) if s]
+    if not order:
+        return out
+    try:
+        from interview_mux.edl_overlap_repair import consumed_segment_ids
+
+        consumed = {str(s) for s in consumed_segment_ids(ctx) if s} & set(order)
+    except Exception:
+        return out
+    if not consumed:
+        return out
+    kept = [s for s in order if s not in consumed]
+    if not kept:
+        return out
+    out["ordered_segment_ids"] = kept
+    excl = list(out.get("excluded_segment_ids") or [])
+    have = {str(r.get("segment_id") if isinstance(r, dict) else r) for r in excl}
+    rat = dict(out.get("exclude_rationales") or {})
+    retired = [s for s in order if s in consumed]
+    for sid in retired:
+        if sid not in have:
+            excl.append({"segment_id": sid, "reason": "edl_overlap_repair:absorbed_by_survivor"})
+            have.add(sid)
+        rat[sid] = str(rat.get(sid) or "edl_overlap_repair:absorbed_by_survivor")
+    out["excluded_segment_ids"] = excl
+    out["exclude_rationales"] = rat
+    keep = set(kept)
+    for ch in out.get("chapters") or []:
+        if isinstance(ch, dict):
+            ch["segment_ids"] = [
+                str(x) for x in (ch.get("segment_ids") or []) if str(x) in keep
+            ]
+    out = reconcile_ordered_vs_excluded(out)
+    try:
+        from interview_mux.order_hash import bump_order_lock
+
+        out = bump_order_lock(out, source="air_order_boundary.retire_consumed_under_freeze")
+    except Exception:
+        pass
+    try:
+        ctx.log(
+            "seat_freeze: union-absorbed id(s) retired from the restored order: "
+            + ", ".join(retired[:8]),
+            level="info",
+            stage="selection",
+        )
+    except Exception:
+        pass
+    return out
+
+
 _SHIP_BLOCKING_OMIT_KINDS = (
     "on_a_roll",
     "incomplete_clause",
@@ -657,6 +724,7 @@ def commit_selection_mutation(
                             # otherwise chapter continuity QC sees leftover blanks
                             # as interlopers (exec_11630 seg_041).
                             out = _drop_blank_segments_under_freeze(ctx, out)
+                        out = _retire_consumed_under_freeze(ctx, out)
         except Exception:
             try:
                 from interview_mux.seat_authority import (
@@ -684,6 +752,7 @@ def commit_selection_mutation(
                             ctx=ctx,
                         )
                         out = _drop_blank_segments_under_freeze(ctx, out)
+                        out = _retire_consumed_under_freeze(ctx, out)
             except Exception:
                 pass
 

@@ -207,6 +207,55 @@ def _exclude_unseated(
     return bump_order_lock(out, source=source)
 
 
+def _record_unseated_after_selection_commit(
+    ctx: RunContext,
+    selection: dict[str, Any],
+    edl: dict[str, Any],
+    clip_ids: list[str],
+    *,
+    source: str,
+) -> dict[str, Any]:
+    """Ids the selection commit kept that no clip seats are omitted on the EDL.
+
+    ``_reconcile`` asked the selection to drop them (``exclude_unseated``);
+    removal authority restored a must-air one. Left unrecorded, the next
+    consumer sees a proper subsequence, demands a sealed EDL commit, the
+    rebuild drops the same clip, and the walk ends at the invoke cap
+    (Nicket's exec_033 seg_032; ISSUES 195). The EDL records what it does
+    not play; the selection keeps its authority.
+    """
+    from interview_mux.order_hash import (
+        copy_order_lock_if_clips_match,
+        seatable_selection_ids,
+    )
+
+    clip_set = set(clip_ids)
+    stranded = [s for s in seatable_selection_ids(selection, edl) if s not in clip_set]
+    if not stranded:
+        return edl
+    out = dict(edl)
+    out["omitted_unplayable_segment_ids"] = [
+        str(s) for s in (out.get("omitted_unplayable_segment_ids") or []) if s
+    ] + stranded
+    try:
+        out = copy_order_lock_if_clips_match(selection, out)
+    except ValueError:
+        pass
+    try:
+        ctx.log(
+            "EDL commit: the selection keeps "
+            + ", ".join(stranded[:8])
+            + " with no clip to play (removal refused); recorded as omitted on the "
+            f"EDL (source={source})",
+            level="warning",
+            stage="edl",
+            detail={"omitted_unplayable": stranded, "source": source},
+        )
+    except Exception:
+        pass
+    return out
+
+
 def _vo_keys(edl: dict[str, Any] | None) -> list[dict[str, Any]]:
     keys: list[dict[str, Any]] = []
     if not isinstance(edl, dict):
@@ -435,6 +484,11 @@ def commit(
                 skip_handoff=True,
                 skip_checkpoint=False,
             )
+            if isinstance(edl_out, dict) and clip_ids:
+                edl_out = _record_unseated_after_selection_commit(
+                    ctx, sel_out, edl_out, clip_ids, source=source
+                )
+                bundle["ordered_segment_ids"] = _ids(sel_out)
         if isinstance(edl_out, dict):
             ctx.write_json(
                 EDL_REL,
@@ -565,9 +619,15 @@ def restore_protected_speech_clips(
         c["air_bound_reason"] = "reseated_must_air"
         restored.append(sid)
     want = [s for s in order if s not in seated and s in protected]
+    already_omitted = {
+        str(s) for s in (edl.get("omitted_unplayable_segment_ids") or []) if s
+    }
+    unplayable: list[str] = []
     for sid in want:
         span = _own_span(sid)
         if span is None:
+            if sid not in already_omitted:
+                unplayable.append(sid)
             continue
         s0, e0 = span
         at = 0
@@ -609,6 +669,26 @@ def restore_protected_speech_clips(
             },
         )
         restored.append(sid)
+    if unplayable:
+        # No tape of its own off the clips around it: the selection keeps the
+        # id (removal authority), the EDL records the omission, and every
+        # selection-versus-clips comparison skips it instead of asking for a
+        # rebuild that lands here again (ISSUES 195).
+        edl["omitted_unplayable_segment_ids"] = [
+            str(s) for s in (edl.get("omitted_unplayable_segment_ids") or []) if s
+        ] + unplayable
+        try:
+            ctx.log(
+                "EDL write: must-air keep(s) "
+                + ", ".join(unplayable)
+                + " have no playable tape off the clips around them; recorded as "
+                f"omitted on the EDL, the selection keeps them (source={source})",
+                level="warning",
+                stage=str(source or "edl"),
+                detail={"omitted_unplayable": unplayable, "source": source},
+            )
+        except Exception:
+            pass
     if not restored:
         return []
     from interview_mux.listenability_guards import reindex_clip_timeline

@@ -7091,6 +7091,65 @@ candidate; with this entry its recovery converges instead of stopping the run.
 Tests: `tests/test_stage_input_sanitize_remedy.py` (five tests; the first
 three fail on the old check).
 
+## [195] STRUCTURAL: the selection and the EDL disagreed in a way no rebuild could clear (Nicket's exec_033 and exec_041, 2026-10-13, both stopped at 58/72)
+
+**Stage / area:** `air_order_integrity` seam repair, `air_order_boundary` seat freeze, `edl_overlap_repair` retire, `air_order` EDL writer and commit
+**Status:** FIXED
+
+**Seen:** junction_snip_qa's inner remaster refused with
+`selection_edl_order_drift: speech clip order diverges from
+ordered_segment_ids` (heal `rebuild` or `exclude_unseated`, "sealed commit
+required before mix"). The driver unmarked edl as a hollow producer and
+rebuilt it from the selection; junction refused the same way; after three
+rebuilds the dispatcher recorded `edl: max_invokes_per_identity` and the
+walk stopped with mix through publish never landed. Removal authority
+refused to take must-air seg_032 off the order from both the air-order and
+the media-IP CTA producers. On exec_041 the artifacts show the shape: the
+selection carried seg_078, which the overlap repair had merged into seg_076
+on the EDL, and the EDL carried seg_063, a 360 ms blank the selection had
+excluded. The retire of seg_078 logged "retired absorbed id(s) from
+selection" six times; the selection on disk still had it.
+
+**Cause:** five holes, one family. Every selection write runs the air-order
+integrity repair, whose incomplete-seam rule pulled seg_063 (it completes
+seg_062's clause on tape) back on air; under the seat freeze that addition
+turned the producer's omit-only delta into a reorder, the meta-gate refused
+the whole write (`opportunity_below_threshold`), and the blank was dropped
+again (`drop_blank_under_freeze`). Every write under the freeze lost that
+way, including the overlap repair's retire of seg_078, so the selection
+kept an id the EDL had merged away; each rebuild re-seated seg_078 from the
+selection, the next mix merged it again, and the retire was refused again.
+`retire_consumed_ids_from_selection` logged success without reading back
+what landed. Separately, a must-air keep the EDL writer could not reseat
+(no tape of its own off the clips around it) was skipped without being
+recorded, and a must-air id removal authority restored after
+`exclude_unseated` was recorded nowhere; both leave the EDL a proper
+subsequence of the selection, which every consumer reads as drift.
+
+**Fix:**
+- `blank_seam_completion_ids` (air_order_integrity): an off-air seam
+  completion that is blank or unusable (excluded as such, or judged so from
+  the manifest row) is never pulled back on air.
+- `_retire_consumed_under_freeze` (air_order_boundary): after a seat-freeze
+  order restore, an id a fuse or overlap union absorbed still leaves the
+  order with reason `edl_overlap_repair:absorbed_by_survivor`; it is an
+  End-A core action (`retire_consumed_under_freeze`).
+- `retire_consumed_ids_from_selection` reads the selection back and reports
+  a refused landing as a warning; only ids that left are returned.
+- `restore_protected_speech_clips` records a must-air keep it cannot reseat
+  in `omitted_unplayable_segment_ids` and says so.
+- `air_order.commit` records ids the selection commit kept without a clip in
+  `omitted_unplayable_segment_ids` (`_record_unseated_after_selection_commit`)
+  so the EDL's order lock copies cleanly and no consumer asks for a rebuild
+  that would land in the same place.
+
+Replayed on a copy of exec_041's metadata: the dry sanitize no longer
+re-adds seg_063, the retire lands as an End-A omit, and the selection ends
+without seg_078 or seg_063.
+
+Tests: `tests/test_selection_edl_drift_family.py` (twelve tests; ten fail
+on the old code, the two that pass are the control cases).
+
 # Planned: prune the job-API driver (phase 2 of entry 79)
 
 Sized on 2026-09-30 after the engine proofs (exec_062 full-auto, exec_064
